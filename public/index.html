@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MausBot Notch</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="notch-stage" class="notch-stage">
+      <!-- Single U-shaped black Notch pouch (starts collapsed, expands downward on click or ⌥Space) -->
+      <div id="notch-pouch" class="notch-pouch" data-expanded="false" data-status="idle" data-typing="false">
+        <!-- Top-flush concave notch ears at y = 0 -->
+        <svg class="notch-ear notch-ear-left" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <path d="M18 0H0C9.941 0 18 8.059 18 18V0Z" />
+        </svg>
+        <svg class="notch-ear notch-ear-right" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <path d="M0 0H18C8.059 0 0 8.059 0 18V0Z" />
+        </svg>
+
+        <!-- COLLAPSED BAR (visible when data-expanded="false") -->
+        <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand MausBot Notch (⌥Space)">
+          <span id="collapsed-mark" class="collapsed-mark"></span>
+          <span id="collapsed-name" class="collapsed-name">MausBot</span>
+          <span id="collapsed-dot" class="collapsed-dot" aria-hidden="true"></span>
+        </button>
+
+        <!-- EXPANDED POUCH CONTENT -->
+        <div id="expanded-content" class="expanded-content">
+          <!-- Top: simple MausBot mark -->
+          <div id="bot-mark-mount" class="bot-mark-mount" aria-hidden="true">
+            <span class="bot-mark"></span>
+          </div>
+
+          <!-- Middle: bot name + status caption -->
+          <div class="bot-title-block">
+            <span id="bot-name-label" class="bot-name-label">MausBot</span>
+            <span id="bot-status-caption" class="bot-status-caption" hidden></span>
+          </div>
+
+          <!-- Bottom row: < (prev bot) | tap-to-type | > (next bot) -->
+          <div class="bottom-nav-row">
+            <button id="prev-bot-btn" class="nav-chevron-btn" type="button" aria-label="Previous bot" title="Previous bot (←)">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.25 3.5 5.75 8l4.5 4.5" />
+              </svg>
+            </button>
+
+            <!-- Center: tap-to-type target OR left-aligned inline text input -->
+            <div class="center-wave-slot">
+              <button
+                id="tap-to-type-btn"
+                class="tap-to-type-btn"
+                type="button"
+                title="Tap to type a message"
+              >
+                <div id="idle-dots" class="idle-dots">
+                  <span></span><span></span><span></span>
+                </div>
+              </button>
+
+              <form id="type-form" class="type-form" autocomplete="off" hidden>
+                <input
+                  id="type-input"
+                  class="type-input"
+                  type="text"
+                  placeholder="Message MausBot…"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                />
+              </form>
+            </div>
+
+            <button id="next-bot-btn" class="nav-chevron-btn" type="button" aria-label="Next bot" title="Next bot (→)">
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5.75 3.5 10.25 8l-4.5 4.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

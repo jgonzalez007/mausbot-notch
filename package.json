@@ -1,0 +1,27 @@
+{
+  "name": "mausbot-notch",
+  "version": "1.0.0",
+  "description": "Native macOS Notch companion for OpenMausBot",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jgonzalez007/mausbot-notch.git"
+  },
+  "keywords": [
+    "openmausbot",
+    "mausbot",
+    "macos",
+    "notch"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "setup": "./scripts/setup.sh",
+    "install:app": "./scripts/setup.sh --install",
+    "start": "./scripts/launch.sh",
+    "server": "node server.mjs",
+    "build:mac": "./scripts/build-mac-app.sh"
+  }
+}
