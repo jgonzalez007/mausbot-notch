@@ -274,7 +274,7 @@ const MIME_TYPES = {
 function getBootstrapData() {
   const config = readConfig();
   const state = readState();
-  const bots = config.bots.map((b) => ({ id: b.id, name: b.name || b.id }));
+  const bots = config.bots.map((b) => ({ id: b.id, name: b.name || b.id, color: b.color || null }));
   const selectedBotId = bots.some((b) => b.id === state.selectedBotId)
     ? state.selectedBotId
     : bots[0]?.id || null;

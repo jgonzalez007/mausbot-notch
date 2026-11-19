@@ -35,6 +35,8 @@ const dom = {
   pouch: document.getElementById("notch-pouch"),
   collapsedBar: document.getElementById("collapsed-bar"),
   collapsedName: document.getElementById("collapsed-name"),
+  botMarkMount: document.getElementById("bot-mark-mount"),
+  botTitleBlock: document.getElementById("bot-title-block"),
   botNameLabel: document.getElementById("bot-name-label"),
   botStatusCaption: document.getElementById("bot-status-caption"),
   prevBotBtn: document.getElementById("prev-bot-btn"),
@@ -47,6 +49,21 @@ const dom = {
 function getSelectedBot() {
   return state.bots.find((b) => b.id === state.selectedBotId) || state.bots[0] || null;
 }
+
+// Mirrors OpenMausBot's own per-bot color tokens (bots.json "color" field) so a bot's
+// notch mark matches its icon color in the main app.
+const BOT_COLORS = {
+  cyan: "#22d3ee",
+  orange: "#fb923c",
+  pink: "#f472b6",
+  green: "#4ade80",
+  chrome: "#9ca3af",
+  blue: "#5b8dee",
+  purple: "#a78bfa",
+  red: "#f87171",
+  yellow: "#facc15"
+};
+const DEFAULT_BOT_COLOR = "#5b8dee";
 
 // ============================================================================
 // NATIVE HIT-RECT SYNC
@@ -118,10 +135,12 @@ function renderPouch() {
     dom.collapsedName.textContent = "MausBot Notch";
     dom.botStatusCaption.hidden = true;
     dom.pouch.dataset.status = "idle";
+    document.documentElement.style.setProperty("--bot-ink", DEFAULT_BOT_COLOR);
     reportHitRectToNative();
     return;
   }
 
+  document.documentElement.style.setProperty("--bot-ink", BOT_COLORS[bot.color] || DEFAULT_BOT_COLOR);
   dom.pouch.dataset.status = state.status;
   dom.collapsedName.textContent = bot.name;
   dom.botNameLabel.textContent = bot.name;
@@ -253,6 +272,15 @@ dom.collapsedBar.addEventListener("click", () => {
   setExpanded(true);
 });
 
+// Double-tap the mark or name while expanded collapses the notch back down,
+// without touching its open/close sizing or animation.
+function collapseOnDoubleTap() {
+  if (!state.expanded || state.typing) return;
+  setExpanded(false);
+}
+dom.botMarkMount.addEventListener("dblclick", collapseOnDoubleTap);
+dom.botTitleBlock.addEventListener("dblclick", collapseOnDoubleTap);
+
 dom.prevBotBtn.addEventListener("pointerdown", (e) => {
   if (state.typing) e.preventDefault();
 });
@@ -321,6 +349,12 @@ window.__notchCommand = async (cmd) => {
   switch (cmd.action) {
     case "toggleExpand":
       setExpanded(!state.expanded);
+      break;
+    case "openQuickReply":
+      // Double-tap ⌘ (bare, no other key): jump straight to the type box so the
+      // selected bot can draft/send a reply to whatever email or message is on screen.
+      setExpanded(true);
+      setTypingMode(true);
       break;
     case "nextBot":
       cycleBot(1);

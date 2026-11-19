@@ -76,10 +76,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var globalMouseMonitor: Any?
     private var globalClickMonitor: Any?
     private var localMouseMonitor: Any?
+    private var globalFlagsMonitor: Any?
+    private var localFlagsMonitor: Any?
+    private var globalKeyDownMonitor: Any?
+    private var localKeyDownMonitor: Any?
     private var toggleHotKeyRef: EventHotKeyRef?
     private var leftArrowHotKeyRef: EventHotKeyRef?
     private var rightArrowHotKeyRef: EventHotKeyRef?
     private var escapeHotKeyRef: EventHotKeyRef?
+
+    // Bare double-tap of ⌘ (no other key) opens the notch straight into quick-reply typing mode.
+    private var commandKeyIsDown = false
+    private var commandKeyUsedInCombo = false
+    private var lastCleanCommandTapAt: Date?
+    private let commandDoubleTapWindow: TimeInterval = 0.4
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         sharedAppDelegate = self
@@ -432,6 +442,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             handleMouseMove()
             return event
         })
+
+        setupCommandDoubleTapMonitors()
+    }
+
+    // MARK: - Bare ⌘⌘ Double-Tap (quick reply)
+    private func setupCommandDoubleTapMonitors() {
+        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
+            self?.processFlagsChanged(event)
+        })
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
+            self?.processFlagsChanged(event)
+            return event
+        })
+
+        globalKeyDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] _ in
+            if self?.commandKeyIsDown == true {
+                self?.commandKeyUsedInCombo = true
+            }
+        })
+        localKeyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
+            if self?.commandKeyIsDown == true {
+                self?.commandKeyUsedInCombo = true
+            }
+            return event
+        })
+    }
+
+    private func processFlagsChanged(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let commandDown = flags.contains(.command)
+
+        if commandDown && !commandKeyIsDown {
+            commandKeyIsDown = true
+            commandKeyUsedInCombo = false
+        } else if !commandDown && commandKeyIsDown {
+            commandKeyIsDown = false
+            // A "clean" tap: nothing else was pressed while ⌘ was held, and no other
+            // modifier is still held at release (rules out ⌘+key combos like ⌘C, ⌘Tab).
+            if !commandKeyUsedInCombo && flags.isEmpty {
+                registerCommandTap()
+            }
+        }
+    }
+
+    private func registerCommandTap() {
+        let now = Date()
+        if let last = lastCleanCommandTapAt, now.timeIntervalSince(last) < commandDoubleTapWindow {
+            lastCleanCommandTapAt = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.openForQuickReply()
+            }
+        } else {
+            lastCleanCommandTapAt = now
+        }
+    }
+
+    func openForQuickReply() {
+        repositionNotchPanel()
+        panel.ignoresMouseEvents = false
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        sendCommandToWeb(["action": "openQuickReply"])
     }
 
     private func updateMousePassthrough() {

@@ -72,7 +72,8 @@ MausBot Notch reads its bot list from:
       "name": "MausBot",
       "id": "<the bot's id, shown on the same Bot API card>",
       "key": "<the Bot API key from step 1>",
-      "baseUrl": "https://your-instance.example.com"
+      "baseUrl": "https://your-instance.example.com",
+      "color": "cyan"
     }
   ]
 }
@@ -83,6 +84,14 @@ MausBot Notch reads its bot list from:
   same host's `/hooks/api/bots/<id>/messages` path.
 - Add one object per bot; the notch cycles through all of them with `←` / `→`
   or from the menu-bar icon.
+- `color` is optional and matches the bot's own color in OpenMausBot (the
+  `color` field in that bot's profile — e.g. `cyan`, `orange`, `pink`,
+  `green`, `chrome`, `blue`, `purple`, `red`, `yellow`): the notch's mark and
+  accents switch to it when that bot is selected. Left out, it falls back to
+  the default blue.
+- A bot whose model doesn't support the Bot API (OpenMausBot shows "This
+  bot's AI can't take Bot API calls" on its Bot API toggle) can't be added
+  here until you switch that bot to a model that does.
 - The file is created mode `0600`, readable only by your account, because it
   holds Bot API keys.
 

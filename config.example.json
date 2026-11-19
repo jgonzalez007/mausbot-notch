@@ -4,7 +4,8 @@
       "name": "MausBot",
       "id": "9ac3bee9-9803-450e-aa74-2c50453417ff",
       "key": "YOUR_BOT_API_KEY",
-      "baseUrl": "https://your-instance.example.com"
+      "baseUrl": "https://your-instance.example.com",
+      "color": "cyan"
     }
   ]
 }
