@@ -17,11 +17,5 @@
   "engines": {
     "node": ">=18"
   },
-  "scripts": {
-    "setup": "./scripts/setup.sh",
-    "install:app": "./scripts/setup.sh --install",
-    "start": "./scripts/launch.sh",
-    "server": "node server.mjs",
-    "build:mac": "./scripts/build-mac-app.sh"
-  }
+  "note": "No npm install needed. server.mjs uses only Node built-ins. Run ./scripts/setup.sh to build and launch."
 }

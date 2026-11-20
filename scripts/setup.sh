@@ -23,7 +23,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 # 2. Verify Swift compiler (Xcode Command Line Tools)
-if ! command -v swiftc >/dev/null 2>&1; then
+if ! command -v swiftc > /dev/null 2>&1; then
   echo "[error] swiftc not found. Installing Xcode Command Line Tools..."
   xcode-select --install || true
   echo "Please complete the Xcode Command Line Tools installation and re-run ./scripts/setup.sh"
@@ -31,7 +31,7 @@ if ! command -v swiftc >/dev/null 2>&1; then
 fi
 
 # 3. Verify Node.js
-if ! command -v node >/dev/null 2>&1; then
+if ! command -v node > /dev/null 2>&1; then
   echo "[error] Node.js is required (v18+). Install via: brew install node"
   exit 1
 fi
@@ -75,4 +75,4 @@ echo "=================================================="
 echo ""
 echo "If the notch shows \"No bots configured\", edit:"
 echo "  $CONFIG_FILE"
-echo "and relaunch with: npm start"
+echo "and relaunch with: ./scripts/launch.sh"

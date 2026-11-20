@@ -1,6 +1,4 @@
-# ✦ MausBot Notch
-
-**A native macOS Notch companion for [OpenMausBot](https://github.com/milind-soni/OpenMausBot)** — lives inside your MacBook's hardware notch and lets you chat with any of your MausBot bots in a quick tap-to-type panel, without opening the app.
+# MausBot Notch
 
 [![Platform: macOS 13+](https://img.shields.io/badge/platform-macOS%2013%2B-black?logo=apple)](https://github.com/jgonzalez007/mausbot-notch)
 [![Node.js: 18+](https://img.shields.io/badge/node-%3E%3D18-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
@@ -19,18 +17,21 @@ OpenMausBot's [Bot API](https://github.com/milind-soni/OpenMausBot/blob/main/doc
 ```bash
 git clone https://github.com/jgonzalez007/mausbot-notch.git ~/mausbot-notch
 cd ~/mausbot-notch
-npm run setup
+./scripts/setup.sh
 ```
 
 To also install `MausBot Notch.app` into `/Applications`:
 
 ```bash
-npm run install:app
+./scripts/setup.sh --install
 ```
 
-`npm run setup` creates an empty bots config the first time it runs (see
-**Configuring bots** below) and then builds and launches the app. Re-run
-`npm start` after editing the config.
+`./scripts/setup.sh` creates an empty bots config the first time it runs (see
+**Configuring bots** below) and then builds and launches the app. Relaunch
+with `./scripts/launch.sh` after editing the config.
+
+> **Requirements:** macOS 13+, Node.js 18+, Xcode Command Line Tools (`swiftc`).
+> No npm or other package manager needed — `server.mjs` uses only Node built-ins.
 
 ---
 
@@ -95,7 +96,7 @@ MausBot Notch reads its bot list from:
 - The file is created mode `0600`, readable only by your account, because it
   holds Bot API keys.
 
-Relaunch with `npm start` after editing it.
+Relaunch with `./scripts/launch.sh` after editing it.
 
 ---
 
@@ -177,7 +178,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -H "Host: 127.0.0.1:4799" \
   http://127.0.0.1:4799/api/bootstrap | head -c 400
 ```
 
-Server logs from `npm start` go to `~/Library/Logs/mausbot-notch/server.log`
+Server logs go to `~/Library/Logs/mausbot-notch/server.log`
 (directory `0700`, log file `0600`).
 
 ---
@@ -185,7 +186,7 @@ Server logs from `npm start` go to `~/Library/Logs/mausbot-notch/server.log`
 ## 🔧 Requirements
 
 - **macOS 13.0+** (Apple Silicon or Intel)
-- **Node.js 18+**
+- **Node.js 18+** — no npm, no package installation needed
 - **Xcode Command Line Tools** (`swiftc`)
 - A bot with the **Bot API** turned on (see step 1 above)
 
