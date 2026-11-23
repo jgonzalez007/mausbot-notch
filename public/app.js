@@ -183,6 +183,63 @@ function cycleBot(delta) {
 // ============================================================================
 let activeReplyPoll = null;
 
+// ============================================================================
+// INBOUND EVENTS: server-sent events from the local bridge.
+// The bridge polls pending bot threads in the background and (once the Bot API
+// grows a push channel) relays /api/notify events, so replies that land while
+// the notch is collapsed or closed still pop the notch and surface.
+// ============================================================================
+let eventSource = null;
+
+function connectEvents() {
+  if (eventSource) return;
+  const token = window.__MAUSBOT_NOTCH_AUTH_TOKEN;
+  if (!token) return; // browser without token: preview mode, no events
+  try {
+    eventSource = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    eventSource.onmessage = (e) => {
+      let evt;
+      try {
+        evt = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      handleServerEvent(evt);
+    };
+  } catch {
+    eventSource = null;
+  }
+}
+
+function handleServerEvent(evt) {
+  if (!evt || typeof evt !== "object" || !evt.type) return;
+
+  const isCurrent = evt.botId ? evt.botId === state.selectedBotId : true;
+
+  if (evt.type === "reply") {
+    if (isCurrent) {
+      // Pop the notch and pull the latest transcript so the caption updates.
+      if (!state.expanded) setExpanded(true);
+      pollTranscriptOnce(evt.botId);
+    }
+    // Replies for other bots are kept in state.json; they show when you
+    // cycle to that bot and the notch polls its transcript.
+    refreshBootstrap();
+  } else if (evt.type === "status" && isCurrent) {
+    state.status = evt.status;
+    state.statusCaption = evt.status === "needs_approval" ? "Waiting on your approval…" : "Working…";
+    renderPouch();
+  } else if (evt.type === "timeout" && isCurrent) {
+    if (state.status !== "idle") {
+      state.status = "idle";
+      state.statusCaption = "";
+      renderPouch();
+    }
+  } else if (evt.type === "hello") {
+    refreshBootstrap();
+  }
+}
+
 function stopReplyPoll() {
   if (activeReplyPoll) {
     clearInterval(activeReplyPoll);
@@ -417,6 +474,7 @@ async function init() {
   await refreshBootstrap();
   renderPouch();
   reportHitRectToNative();
+  connectEvents();
   setInterval(refreshBootstrap, 8000);
 }
 

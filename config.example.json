@@ -1,4 +1,6 @@
 {
+  "notifyToken": "",
+  "pollIntervalSec": 20,
   "bots": [
     {
       "name": "MausBot",

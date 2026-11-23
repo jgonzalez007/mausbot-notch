@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax-check local bridge
+        run: node --check server.mjs
+
+      - name: Build app (native arch)
+        run: bash scripts/build-mac-app.sh
+
+      - name: Verify signature
+        run: codesign --verify --deep --strict "MausBot Notch.app"
+
+      - name: Smoke test
+        run: bash scripts/smoke-test.sh

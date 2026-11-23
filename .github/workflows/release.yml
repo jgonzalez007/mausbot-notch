@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build universal app + DMG
+        run: bash scripts/make-release.sh
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "v$VERSION" \
+            "dist/MausBotNotch-$VERSION.dmg" \
+            --title "MausBot Notch v$VERSION" \
+            --notes "Native macOS notch companion for [OpenMausBot](https://github.com/milind-soni/OpenMausBot).
+
+          - Universal binary (Apple Silicon + Intel), ad-hoc signed
+          - First launch: right-click → **Open** (or run \`install.sh\`, which clears the quarantine flag)
+          - No package manager needed; Node.js 18+ and Xcode Command Line Tools required"
+
+      - name: Publish checksums
+        run: shasum -a 256 dist/*.dmg | tee "dist/MausBotNotch-${GITHUB_REF_NAME#v}.dmg.sha256"

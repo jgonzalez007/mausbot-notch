@@ -10,6 +10,11 @@ global ⌥Space hotkey) from [robzilla1738/grokbot-notch](https://github.com/rob
 character rendering removed and replaced with a small bridge that talks to
 OpenMausBot's [Bot API](https://github.com/milind-soni/OpenMausBot/blob/main/docs/bot-api.md).
 
+**Running [OpenMausBot](https://github.com/milind-soni/OpenMausBot)?** This is
+your notch: one `Option+Space` and your bots live in the notch — cycle them
+with `←` / `→`, tap to type, and replies that land while the notch is closed
+pop it open. Zero npm dependencies; the only runtime is Node.js built-ins.
+
 ---
 
 ## ⚡ Setup
@@ -18,6 +23,14 @@ OpenMausBot's [Bot API](https://github.com/milind-soni/OpenMausBot/blob/main/doc
 git clone https://github.com/jgonzalez007/mausbot-notch.git ~/mausbot-notch
 cd ~/mausbot-notch
 ./scripts/setup.sh
+```
+
+**No compiler? Install a release instead** (downloads the latest universal
+Apple Silicon + Intel DMG, installs to `/Applications`, clears the quarantine
+flag and launches — no clone or Xcode Command Line Tools needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jgonzalez007/mausbot-notch/main/install.sh | bash
 ```
 
 To also install `MausBot Notch.app` into `/Applications`:
@@ -68,6 +81,8 @@ MausBot Notch reads its bot list from:
 
 ```json
 {
+  "notifyToken": "",
+  "pollIntervalSec": 20,
   "bots": [
     {
       "name": "MausBot",
@@ -80,6 +95,13 @@ MausBot Notch reads its bot list from:
 }
 ```
 
+- `notifyToken` (optional): a stable 32+ character string that survives
+  relaunches. Lets a same-host OpenMausBot instance (or a hook script) push
+  events to `POST http://127.0.0.1:4799/api/notify`. Empty = disabled. It only
+  unlocks `/api/notify` — never the bootstrap or message routes.
+- `pollIntervalSec` (optional, 10–300, default 20): how often the bridge
+  re-checks each pending bot thread, so a reply that lands while the notch is
+  closed still pops it open. Respects the Bot API's 10 calls/min rate limit.
 - `baseUrl` is wherever this server's webhooks are reachable — a Cloud's
   public address, or your self-hosted domain. The Bot API lives under that
   same host's `/hooks/api/bots/<id>/messages` path.
@@ -109,6 +131,12 @@ Relaunch with `./scripts/launch.sh` after editing it.
 | **Type a message** | Tap the center dots *(or start typing any letter when expanded)* → **`Enter`** to send |
 | **Cancel typing / Close** | **`Esc`** or click outside the notch pouch |
 
+The menu-bar icon (✦ / ⏳) also lets you pick a bot, quit, and toggle
+**Launch at Login** (an `SMAppService` login item, so the notch comes back on
+boot). Registration works best with the app in a stable location — install to
+`/Applications` (release or `setup.sh --install`) rather than a throwaway
+build directory.
+
 ---
 
 ## 🏗️ Architecture
@@ -123,11 +151,15 @@ mausbot-notch/
 │   ├── index.html            # Collapsed chin bar + expanded notch pouch
 │   ├── styles.css            # Black hardware-notch geometry and spring transitions
 │   └── app.js                # Notch state machine, bot cycling, tap-to-type chat
-├── server.mjs                # Local Node.js bridge to the OpenMausBot Bot API
+├── server.mjs                # Local Node.js bridge to the OpenMausBot Bot API (+ SSE, /api/notify, background poller)
 ├── config.example.json       # Template copied to the real bots config on first setup
+├── install.sh                # Release installer: download DMG → /Applications → launch
+├── .github/workflows/        # ci.yml (build + smoke test), release.yml (tag → universal DMG release)
 └── scripts/
     ├── setup.sh               # Prerequisite check, config template, build & launch
     ├── build-mac-app.sh        # Compiles the Swift binary & signs MausBot Notch.app
+    ├── make-release.sh         # Universal (arm64 + x86_64) build + DMG + sha256
+    ├── smoke-test.sh           # Boots the bridge in a throwaway HOME; asserts auth, Host/Origin, SSE
     └── launch.sh               # Starts the local bridge server & opens MausBot Notch.app
 ```
 
@@ -148,6 +180,34 @@ mausbot-notch/
    messages), so switching bots and reopening the notch shows the latest
    status again.
 
+### Inbound notifications (bot → notch)
+
+The Bot API is outbound-only, so "inbound" is built in three layers:
+
+1. **Server-side poller.** While a conversation is `pending` (the bot is
+   still working, or waiting on an approval in the app), the bridge keeps
+   polling the thread every `pollIntervalSec` seconds — even when the notch
+   is closed or the app was relaunched. When a reply lands, it is stored in
+   `state.json` and pushed to the open UI over server-sent events
+   (`GET /api/events`), which pops the notch and refreshes the caption.
+   Polling respects the Bot API's 10 calls/min per key (60 s cooldown,
+   5 min backoff on `429`) and gives up on a thread after 30 minutes.
+2. **`POST /api/notify`.** A loopback endpoint for same-host pushes. Point a
+   same-host OpenMausBot instance (or a hook script) at
+   `http://127.0.0.1:4799/api/notify` with the stable `notifyToken` from
+   `config.json` and body `{"botId": "…", "text": "…"}` or
+   `{"botId": "…", "status": "working|needs_approval"}`. This is the forward
+   hook: the day the Bot API gains a push channel, wire it here and the notch
+   pops with zero app changes.
+3. **UI event stream.** The notch subscribes to `/api/events` on load
+   (`EventSource`; the launch token travels as a query parameter, since
+   `EventSource` cannot send headers) and handles `reply`, `status` and
+   `timeout` events per bot.
+
+Note: a *hosted* OpenMausBot Cloud cannot reach your loopback bridge; layer 2
+only works for same-host/self-hosted setups. Fully proactive pings (the bot
+choosing to interrupt you) await a push channel upstream.
+
 ---
 
 ## 🔒 Local bridge security
@@ -166,6 +226,9 @@ is stored at:
 All `/api/*` routes require `Authorization: Bearer <token>` (or
 `X-MausBot-Notch-Token`). The notch web UI receives the token via injected
 HTML / a Swift `WKUserScript`; `public/app.js` sends it on every API call.
+Query-parameter tokens are only accepted on `/api/events` and `/api/notify`.
+The optional stable `notifyToken` from `config.json` only unlocks
+`/api/notify`, never the bootstrap or message routes.
 
 Bot API keys live only in `config.json` (mode `0600`) and are never logged or
 echoed back to the web UI.
@@ -191,6 +254,19 @@ Server logs go to `~/Library/Logs/mausbot-notch/server.log`
 - A bot with the **Bot API** turned on (see step 1 above)
 
 ---
+
+## 📦 Releases
+
+Push a semver tag — the release workflow builds a universal (Apple Silicon +
+Intel) ad-hoc-signed DMG and attaches it to a GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Ad-hoc signed builds show a Gatekeeper warning on first direct launch;
+`install.sh` clears the quarantine flag for you.
 
 ## 📄 License
 
