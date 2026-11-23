@@ -55,7 +55,19 @@ echo "[install] Downloading $DMG_URL"
 curl -fL --progress-bar -o "$DMG_PATH" "$DMG_URL"
 
 echo "[install] Mounting..."
-MOUNT_POINT="$(hdiutil attach -nobrowse -print '%r' "$DMG_PATH" | tail -n 1)"
+# Detach any stale mounts from earlier failed runs (e.g. "/Volumes/MausBot Notch 1").
+for v in "/Volumes/MausBot Notch" "/Volumes/MausBot Notch"[0-9]*; do
+  [ -d "$v" ] && hdiutil detach -quiet "$v" 2>/dev/null || true
+done
+# hdiutil attach prints tab-separated lines: device, fs type, mount point.
+# The mount point is the third tab-separated field (it may contain spaces).
+ATTACH_OUT="$(hdiutil attach -nobrowse "$DMG_PATH" 2>&1)"
+MOUNT_POINT="$(printf '%s\n' "$ATTACH_OUT" | awk -F'\t' 'NF >= 3 && $3 ~ /^\/Volumes\// { last = $3 } END { print last }')"
+if [ -z "$MOUNT_POINT" ]; then
+  echo "[error] Could not determine the DMG mount point:"
+  echo "$ATTACH_OUT"
+  exit 1
+fi
 
 echo "[install] Installing to /Applications..."
 rm -rf "/Applications/$APP_NAME.app"
