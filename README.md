@@ -111,6 +111,48 @@ Relaunch with `./scripts/launch.sh` after editing it.
 
 ---
 
+## ✍️ Double-⌘ reply (works like Kai OS)
+
+Double-tap ⌘ and the notch writes your reply to what's in front of you:
+
+1. It reads the **selected email in Mail**, the **Slack conversation**, your **highlighted text**, or
+   (anywhere else) the **app's window from a screenshot**, read on this Mac with Vision.
+2. A **local Ollama model** drafts the reply as you, with no tools. The email's text is treated as
+   data, so instructions hidden in it can't make anything happen. The model already loaded in
+   Ollama is used (fastest), otherwise the first installed one; set
+   `"reply": { "model": "qwen3:30b", "ollamaUrl": "http://127.0.0.1:11434" }` in `config.json` to choose.
+3. The draft is written where you'll send it, and **never sent**:
+   - cursor in a message box (Slack, an email body) → typed right there;
+   - email selected in Mail → Mail opens its own reply (Mail picks the recipient) with the draft in it;
+   - otherwise → shown in the notch; click it to copy.
+
+## 📝 Summarize, Proofread, Rewrite (same as Kai OS)
+
+Click the notch to open it (540 wide, Kai's size). Three buttons sit under the bot name:
+
+- **Summarize** reads the app in front and gives a short summary, key points and what needs you. Follow-ups: Shorter, Action items, Draft a reply.
+- **Proofread** fixes the text field you were typing in (or your selection), and falls back to the screen when there is none. The card shows the corrected text and a list of changes. Follow-ups: More formal, Friendlier, Shorter.
+- **Rewrite ▾** offers Make it concise, Explain simply, Turn into bullets and Translate to Spanish for the text you selected or are editing.
+
+Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the local Ollama model, so nothing leaves this Mac.
+
+## 🔐 macOS permissions (double-⌘)
+
+Double-⌘ needs these, in System Settings → Privacy & Security:
+
+- **Accessibility** (called **Device Control and Data Access** on newer macOS) — to notice ⌘ taps,
+  read Slack or selected text, and type the draft at your cursor.
+- **Automation → Mail** — to read the selected email and open the reply. macOS asks the first time.
+- **Screen Recording** (called **Screen & System Audio Recording**) — to read other apps from the
+  screen. If MausBot Notch isn't in the list, click **+** and pick `MausBot Notch.app`, then quit
+  and reopen the notch.
+
+Without an Apple Developer certificate the app is signed ad-hoc, and macOS ties these permissions
+to that exact build. **After every rebuild, remove MausBot Notch from each list in System Settings →
+Privacy & Security (–) and turn it on again**, even if the switch still looks on. Launching
+without rebuilding (`./scripts/launch.sh`) keeps the permissions. An "Apple Development" or
+"Developer ID" certificate in your keychain is picked up automatically and keeps them across rebuilds.
+
 ## 🏗️ Architecture
 
 ```text

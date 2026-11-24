@@ -35,7 +35,6 @@ const dom = {
   pouch: document.getElementById("notch-pouch"),
   collapsedBar: document.getElementById("collapsed-bar"),
   collapsedName: document.getElementById("collapsed-name"),
-  botMarkMount: document.getElementById("bot-mark-mount"),
   botTitleBlock: document.getElementById("bot-title-block"),
   botNameLabel: document.getElementById("bot-name-label"),
   botStatusCaption: document.getElementById("bot-status-caption"),
@@ -43,7 +42,20 @@ const dom = {
   nextBotBtn: document.getElementById("next-bot-btn"),
   tapToTypeBtn: document.getElementById("tap-to-type-btn"),
   typeForm: document.getElementById("type-form"),
-  typeInput: document.getElementById("type-input")
+  typeInput: document.getElementById("type-input"),
+  actionChips: document.getElementById("action-chips"),
+  rewriteChip: document.getElementById("rewrite-chip"),
+  rewriteMenu: document.getElementById("rewrite-menu"),
+  rewriteBack: document.getElementById("rewrite-back"),
+  resultView: document.getElementById("result-view"),
+  resultTitle: document.getElementById("result-title"),
+  resultText: document.getElementById("result-text"),
+  resultNotes: document.getElementById("result-notes"),
+  resultCopy: document.getElementById("result-copy"),
+  resultClose: document.getElementById("result-close"),
+  resultReplace: document.getElementById("result-replace"),
+  refineChips: document.getElementById("refine-chips"),
+  resultFooter: document.getElementById("result-footer")
 };
 
 function getSelectedBot() {
@@ -96,6 +108,8 @@ function setExpanded(expanded) {
     refreshBootstrap();
   } else {
     setTypingMode(false);
+    closeResult();
+    showRewriteMenu(false);
   }
   reportHitRectToNative();
   let steps = 0;
@@ -130,8 +144,11 @@ function setTypingMode(typing, initialChar = "") {
 // ============================================================================
 function renderPouch() {
   const bot = getSelectedBot();
+  dom.pouch.dataset.result = state.result && state.expanded ? "true" : "false";
+  renderResult();
   if (!bot) {
     dom.botNameLabel.textContent = "No bots configured";
+    dom.botNameLabel.hidden = false;
     dom.collapsedName.textContent = "MausBot Notch";
     dom.botStatusCaption.hidden = true;
     dom.pouch.dataset.status = "idle";
@@ -142,13 +159,19 @@ function renderPouch() {
 
   document.documentElement.style.setProperty("--bot-ink", BOT_COLORS[bot.color] || DEFAULT_BOT_COLOR);
   dom.pouch.dataset.status = state.status;
+  // A double-⌘ draft needs room to be read, so the pouch grows while one is showing.
+  dom.pouch.dataset.draft = state.copyText && state.expanded ? "true" : "false";
+
   dom.collapsedName.textContent = bot.name;
   dom.botNameLabel.textContent = bot.name;
+  // The identity bar at the top already shows the name; don't repeat it in the middle.
+  dom.botNameLabel.hidden = true;
   dom.typeInput.placeholder = `Message ${bot.name}…`;
 
   if (state.statusCaption) {
     dom.botStatusCaption.textContent = state.statusCaption;
     dom.botStatusCaption.hidden = false;
+    dom.botStatusCaption.title = state.status === "idle" ? "Click to copy" : "";
   } else {
     dom.botStatusCaption.hidden = true;
   }
@@ -162,6 +185,7 @@ async function selectBot(botId) {
   state.selectedBotId = bot.id;
   state.status = "idle";
   state.statusCaption = "";
+  state.copyText = "";
   renderPouch();
 
   apiFetch("/api/select-bot", {
@@ -195,6 +219,7 @@ async function sendMessage(text) {
   if (!bot) return;
 
   stopReplyPoll();
+  state.copyText = "";
   state.status = "sending";
   state.statusCaption = "Sending…";
   renderPouch();
@@ -268,18 +293,34 @@ async function pollTranscriptOnce(botId) {
 // ============================================================================
 // EVENTS & SHORTCUTS
 // ============================================================================
+
+// Collapsed: click to expand. Expanded: click is disabled via pointer-events:none in CSS.
 dom.collapsedBar.addEventListener("click", () => {
-  setExpanded(true);
+  if (!state.expanded) setExpanded(true);
 });
 
-// Double-tap the mark or name while expanded collapses the notch back down,
-// without touching its open/close sizing or animation.
+// Double-tap the identity bar or title block while expanded collapses the notch.
 function collapseOnDoubleTap() {
   if (!state.expanded || state.typing) return;
   setExpanded(false);
 }
-dom.botMarkMount.addEventListener("dblclick", collapseOnDoubleTap);
+dom.collapsedBar.addEventListener("dblclick", collapseOnDoubleTap);
 dom.botTitleBlock.addEventListener("dblclick", collapseOnDoubleTap);
+
+// Click the status caption (the bot's answer) to copy it, so it can be pasted into Mail, Slack, etc.
+let copiedFlashTimer = null;
+dom.botStatusCaption.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const text = (state.copyText || dom.botStatusCaption.textContent).trim();
+  if (!text || state.status !== "idle") return;
+  postNativeMessage({ type: "copyToClipboard", text });
+  const original = text;
+  dom.botStatusCaption.textContent = "Copied";
+  clearTimeout(copiedFlashTimer);
+  copiedFlashTimer = setTimeout(() => {
+    if (dom.botStatusCaption.textContent === "Copied") dom.botStatusCaption.textContent = original;
+  }, 900);
+});
 
 dom.prevBotBtn.addEventListener("pointerdown", (e) => {
   if (state.typing) e.preventDefault();
@@ -319,6 +360,11 @@ dom.typeForm.addEventListener("submit", (e) => {
 window.addEventListener("keydown", (e) => {
   if (!state.expanded) return;
 
+  if (state.result) {
+    if (e.key === "Escape") closeResult();
+    return;
+  }
+
   if (e.key === "Escape") {
     if (state.typing) {
       dom.typeInput.value = "";
@@ -343,6 +389,259 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// ============================================================================
+// DOUBLE ⌘ REPLY (Kai OS behavior): the native side read the screen; draft a reply as the
+// user with the local model, show it, and hand it back to be written into Mail or at the cursor.
+// ============================================================================
+let draftCloseTimer = null;
+
+async function draftReply(context, destination) {
+  stopReplyPoll();
+  closeResult(false);
+  clearTimeout(draftCloseTimer);
+  state.copyText = "";
+  state.status = "working";
+  state.statusCaption = context && context.kind === "mail" ? "Writing a reply to this email…" : "Writing a reply…";
+  renderPouch();
+  let res;
+  try {
+    res = await apiFetch("/api/draft-reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(context || {})
+    }).then((r) => r.json());
+  } catch (err) {
+    res = { ok: false, error: err.message || "Couldn't write a reply." };
+  }
+  if (!res.ok) {
+    state.status = "error";
+    state.statusCaption = res.error || "Couldn't write a reply.";
+    renderPouch();
+    return;
+  }
+  state.copyText = res.draft;
+  state.status = "idle";
+  state.statusCaption = destination === "awaitingCursor"
+    ? `${res.draft}\n\n(Click to copy, then paste it in your reply.)`
+    : res.draft;
+  renderPouch();
+  if (destination !== "awaitingCursor") postNativeMessage({ type: "writeDraft", text: res.draft });
+}
+
+// ============================================================================
+// SUMMARIZE · PROOFREAD · REWRITE (Kai OS's notch chips and result card)
+// The native side reads the text (the field you're writing in, or the screen); the local
+// model does the work; Replace puts the suggestion back only when you press it.
+// ============================================================================
+const TASK_TITLES = { summarize: "Summary", proofread: "Proofread", rewrite: "Rewrite" };
+const TASK_WORKING = {
+  summarize: "Reading your screen…",
+  proofread: "Proofreading what you wrote…",
+  rewrite: "Rewriting your text…"
+};
+const PROMPT_NAMES = {
+  "starter-concise": "Make it concise",
+  "starter-simple": "Explain simply",
+  "starter-bullets": "Turn into bullets",
+  "starter-spanish": "Translate to Spanish"
+};
+// Kai's KaiScreenTask.Refinement.available(for:)
+const REFINE_OPTIONS = {
+  summarize: [["shorter", "Shorter"], ["actions", "Action items"], ["reply", "Draft a reply"]],
+  proofread: [["formal", "More formal"], ["friendly", "Friendlier"], ["shorter", "Shorter"]],
+  rewrite: [["formal", "More formal"], ["friendly", "Friendlier"], ["shorter", "Shorter"]]
+};
+
+let taskSeq = 0;
+
+function showRewriteMenu(show) {
+  dom.rewriteMenu.hidden = !show;
+  dom.actionChips.hidden = show;
+}
+
+function startScreenTask(task, promptId) {
+  stopReplyPoll();
+  setTypingMode(false);
+  showRewriteMenu(false);
+  state.copyText = "";
+  state.statusCaption = "";
+  state.status = "working";
+  state.result = {
+    seq: ++taskSeq,
+    task,
+    promptId: promptId || "",
+    title: promptId ? PROMPT_NAMES[promptId] || TASK_TITLES[task] : TASK_TITLES[task],
+    text: TASK_WORKING[task],
+    notes: "",
+    phase: "working",
+    canReplace: false,
+    replaceState: "unavailable",
+    footer: ""
+  };
+  renderPouch();
+  postNativeMessage({ type: "screenTask", task });
+}
+
+async function runScreenTask(cmd) {
+  const r = state.result;
+  if (!r || r.task !== cmd.task || r.phase !== "working") return;
+  const seq = r.seq;
+  r.source = cmd.source;
+  r.original = cmd.text;
+  r.canReplace = Boolean(cmd.canReplace);
+  r.text = cmd.source === "field" ? `${TASK_WORKING[r.task]}\n\nRead from ${cmd.app}.` : `${TASK_WORKING[r.task]}\n\nRead from ${cmd.app || "your screen"}.`;
+  renderPouch();
+  let res;
+  try {
+    res = await apiFetch("/api/screen-task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: r.task,
+        promptId: r.promptId,
+        source: cmd.source,
+        text: cmd.text,
+        isSelection: Boolean(cmd.isSelection),
+        kind: cmd.kind || "",
+        from: cmd.from || "",
+        subject: cmd.subject || "",
+        app: cmd.app || ""
+      })
+    }).then((x) => x.json());
+  } catch (err) {
+    res = { ok: false, error: err.message || "Couldn't reach the local model." };
+  }
+  if (!state.result || state.result.seq !== seq) return;
+  if (!res.ok) {
+    failResult(res.error || "Something went wrong. Try again.");
+    return;
+  }
+  r.text = res.text;
+  r.notes = res.notes || "";
+  r.phase = "done";
+  r.replaceState = r.canReplace ? "ready" : "unavailable";
+  r.footer = r.canReplace
+    ? "Read on this Mac. Nothing is replaced until you press Replace."
+    : r.task === "proofread"
+      ? "Read from your screen on this Mac. To replace your text from here, select it (or click into it) first, then press Proofread."
+      : "Read from your screen on this Mac. Nothing was sent anywhere.";
+  state.status = "idle";
+  renderPouch();
+}
+
+function failResult(message) {
+  if (!state.result) return;
+  state.result.phase = "failed";
+  state.result.text = message;
+  state.result.notes = "";
+  state.result.canReplace = false;
+  state.status = "error";
+  renderPouch();
+}
+
+async function refineResult(refinement) {
+  const r = state.result;
+  if (!r || r.phase !== "done" || r.refining) return;
+  const seq = r.seq;
+  const previous = r.text;
+  r.refining = true;
+  state.status = "working";
+  renderPouch();
+  let res;
+  try {
+    res = await apiFetch("/api/refine", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ previous, refinement })
+    }).then((x) => x.json());
+  } catch (err) {
+    res = { ok: false, error: err.message };
+  }
+  if (!state.result || state.result.seq !== seq) return;
+  r.refining = false;
+  state.status = "idle";
+  if (res.ok) {
+    r.text = res.text;
+    r.notes = "";
+  } else {
+    r.footer = res.error || "Couldn't revise it.";
+  }
+  renderPouch();
+}
+
+function closeResult(render = true) {
+  if (!state.result) return;
+  state.result = null;
+  state.status = "idle";
+  if (render) renderPouch();
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+// Kai's forDisplay: list markers become bullets; **bold** shows bold. Everything else is plain text.
+function formatResult(text) {
+  return String(text)
+    .split("\n")
+    .map((line) => {
+      const m = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+      const out = m ? `${m[1]}• ${m[2]}` : line;
+      return escapeHtml(out).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    })
+    .join("\n");
+}
+
+function renderResult() {
+  const r = state.result;
+  dom.resultView.hidden = !r;
+  if (!r) return;
+  dom.resultTitle.textContent = r.title;
+  dom.resultText.innerHTML = formatResult(r.refining ? `${r.text}\n\nRevising…` : r.text);
+  dom.resultNotes.innerHTML = formatResult(r.notes || "");
+  dom.resultCopy.hidden = r.phase !== "done";
+  const replacing = r.replaceState === "replacing" || r.replaceState === "replaced";
+  dom.resultReplace.hidden = !(r.phase === "done" && r.canReplace);
+  dom.resultReplace.disabled = Boolean(r.refining) || replacing || r.text.trim() === String(r.original || "").trim();
+  dom.resultReplace.textContent = r.replaceState === "replacing" ? "Replacing…" : r.replaceState === "replaced" ? "Replaced" : "Replace";
+  dom.refineChips.replaceChildren();
+  if (r.phase === "done") {
+    for (const [id, label] of REFINE_OPTIONS[r.task] || []) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.textContent = label;
+      b.disabled = Boolean(r.refining) || replacing;
+      b.addEventListener("click", () => refineResult(id));
+      dom.refineChips.appendChild(b);
+    }
+  }
+  dom.resultFooter.textContent = r.footer || "";
+}
+
+dom.actionChips.querySelectorAll("[data-task]").forEach((b) =>
+  b.addEventListener("click", () => startScreenTask(b.dataset.task))
+);
+dom.rewriteChip.addEventListener("click", () => showRewriteMenu(true));
+dom.rewriteBack.addEventListener("click", () => showRewriteMenu(false));
+dom.rewriteMenu.querySelectorAll("[data-prompt]").forEach((b) =>
+  b.addEventListener("click", () => startScreenTask("rewrite", b.dataset.prompt))
+);
+dom.resultClose.addEventListener("click", () => closeResult());
+dom.resultCopy.addEventListener("click", () => {
+  if (!state.result) return;
+  postNativeMessage({ type: "copyToClipboard", text: state.result.text });
+  dom.resultCopy.textContent = "Copied";
+  setTimeout(() => (dom.resultCopy.textContent = "Copy"), 900);
+});
+dom.resultReplace.addEventListener("click", () => {
+  const r = state.result;
+  if (!r || !r.canReplace || r.phase !== "done") return;
+  r.replaceState = "replacing";
+  renderPouch();
+  postNativeMessage({ type: "replaceText", text: r.text });
+});
+
 // Native host commands (⌥Space toggle, menu bar bot selection)
 window.__notchCommand = async (cmd) => {
   if (!cmd || typeof cmd !== "object") return;
@@ -350,11 +649,68 @@ window.__notchCommand = async (cmd) => {
     case "toggleExpand":
       setExpanded(!state.expanded);
       break;
-    case "openQuickReply":
-      // Double-tap ⌘ (bare, no other key): jump straight to the type box so the
-      // selected bot can draft/send a reply to whatever email or message is on screen.
+    case "screenAnswerReading":
+      // Double-tap ⌘ (bare, no other key): the native side is reading the email, Slack
+      // conversation, selected text, clipboard, or screen OCR in front of the user.
       setExpanded(true);
-      setTypingMode(true);
+      setTypingMode(false);
+      stopReplyPoll();
+      closeResult(false);
+      state.status = "working";
+      state.statusCaption = "Reading your screen…";
+      renderPouch();
+      break;
+    case "draftReply":
+      draftReply(cmd.context, cmd.destination);
+      break;
+    case "draftWriting":
+      state.status = "working";
+      state.statusCaption = cmd.caption || "Writing…";
+      renderPouch();
+      break;
+    case "draftWritten":
+      // Like Kai: say where it went, then get out of the way of the email.
+      state.status = "idle";
+      state.statusCaption = cmd.caption || "Written. Review it and send it yourself.";
+      renderPouch();
+      clearTimeout(draftCloseTimer);
+      draftCloseTimer = setTimeout(() => {
+        if (state.statusCaption === cmd.caption) setExpanded(false);
+      }, 2500);
+      break;
+    case "draftWriteFailed":
+      state.status = "idle";
+      state.statusCaption = `${cmd.error || "Couldn't write the draft."}\n\n${state.copyText || ""}`.trim();
+      renderPouch();
+      break;
+    case "screenAnswerFailed":
+      stopReplyPoll();
+      state.status = "error";
+      state.statusCaption = cmd.error || "Couldn't read your screen.";
+      renderPouch();
+      break;
+    case "screenTaskText":
+      runScreenTask(cmd);
+      break;
+    case "screenTaskFailed":
+      failResult(cmd.error || "Couldn't read your screen.");
+      break;
+    case "replaced":
+      if (state.result) {
+        state.result.replaceState = "replaced";
+        state.result.footer = cmd.caption || "Replaced.";
+        renderPouch();
+        setTimeout(() => {
+          if (state.result && state.result.replaceState === "replaced") setExpanded(false);
+        }, 1400);
+      }
+      break;
+    case "replaceFailed":
+      if (state.result) {
+        state.result.replaceState = "ready";
+        state.result.footer = cmd.error || "Couldn't replace the text. Use Copy.";
+        renderPouch();
+      }
       break;
     case "nextBot":
       cycleBot(1);
@@ -363,7 +719,9 @@ window.__notchCommand = async (cmd) => {
       cycleBot(-1);
       break;
     case "escape":
-      if (state.typing) {
+      if (state.result) {
+        closeResult();
+      } else if (state.typing) {
         dom.typeInput.value = "";
         setTypingMode(false);
       } else if (state.expanded) {
