@@ -73,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private let panelHeight: CGFloat = 570
     private var hitRectInPanel = NSRect(x: 94, y: 0, width: 212, height: 56)
     private var isNotchOpen = false
+    /// Open and meant to have the keyboard. False while a bot's reply is only being shown.
+    private var isNotchActive = false
     private var isTypingInNotch = false
     private var currentBotName = "MausBot"
     private var currentStatus = "idle"
@@ -95,6 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     // and the second tap must start within 0.35 s of the first one ending.
     /// Where the next double-⌘ draft goes, decided at the moment of the double tap (like Kai OS).
     private var pendingReply: PendingReply?
+    /// One per double tap. Anything that comes back with an older id is dropped.
+    private var draftID = 0
+    private var isWritingDraft = false
     /// Proofread / Rewrite: the text read from the field the user is writing in, kept so an approved
     /// suggestion can go back in its place (Kai's KaiFocusedText).
     private var focusedText: FocusedText?
@@ -546,56 +551,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     /// (no tools, the text is untrusted), then write the draft into a Mail reply or at the cursor.
     /// Nothing is ever sent; the user reviews the draft where it lands and sends it themselves.
     func answerFromScreen() {
+        // A paste is on its way to another app: taking the keyboard now could send it elsewhere.
+        guard !isWritingDraft else { return }
         // Decide which app to read, and where the draft goes, BEFORE the notch takes focus.
         let target = ScreenContext.targetApp()
-        let cursorInTextArea = target.map { ScreenContext.focusIsTextArea(pid: $0.processIdentifier) } ?? false
+        let cursor = target.flatMap { DraftCursor.current(in: $0) }
+        draftID += 1
+        let id = draftID
+        let startedAt = ProcessInfo.processInfo.systemUptime
         pendingReply = nil
         repositionNotchPanel()
         panel.ignoresMouseEvents = false
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        sendCommandToWeb(["action": "screenAnswerReading"])
+        sendCommandToWeb(["action": "screenAnswerReading", "id": id])
         Task { @MainActor in
             do {
                 let context = try await ScreenContext.capture(app: target)
-                let destination: ReplyDestination = cursorInTextArea ? .cursor : (context.kind == .mail ? .mailReply : .awaitingCursor)
-                self.pendingReply = PendingReply(app: target, destination: destination, mailMessageID: context.mailMessageID)
-                self.sendCommandToWeb(["action": "draftReply", "context": context.payload, "destination": destination.rawValue])
+                guard id == self.draftID else { return }
+                let destination: ReplyDestination = cursor != nil ? .cursor : (context.kind == .mail ? .mailReply : .awaitingCursor)
+                self.pendingReply = PendingReply(id: id, app: target, destination: destination, mailMessageID: context.mailMessageID,
+                                                 cursor: cursor, startedAt: startedAt)
+                self.sendCommandToWeb(["action": "draftReply", "id": id, "context": context.payload, "destination": destination.rawValue])
             } catch {
-                self.sendCommandToWeb(["action": "screenAnswerFailed", "error": error.localizedDescription])
+                guard id == self.draftID else { return }
+                self.sendCommandToWeb(["action": "screenAnswerFailed", "id": id, "error": error.localizedDescription])
             }
         }
     }
 
-    /// Writes a finished draft where `pendingReply` says. Called once per double tap.
-    private func writeDraft(_ text: String) {
-        guard let pending = pendingReply else { return }
+    /// Writes a finished draft where `pendingReply` says, if that place is still in front.
+    /// Otherwise nothing is pasted and the notch shows the draft to copy. Called once per double tap.
+    private func writeDraft(_ text: String, id: Int) {
+        guard let pending = pendingReply, pending.id == id, !isWritingDraft else { return }
         pendingReply = nil
         guard pending.destination != .awaitingCursor else { return }
-        guard AXIsProcessTrusted() else {
-            sendCommandToWeb(["action": "draftWriteFailed", "error": ScreenContextError.accessibilityNeeded.localizedDescription])
-            return
-        }
+        isWritingDraft = true
         let appName = pending.app?.localizedName ?? "that app"
-        sendCommandToWeb(["action": "draftWriting", "caption": pending.destination == .mailReply ? "Opening a reply in Mail…" : "Writing it in \(appName)…"])
+        sendCommandToWeb(["action": "draftWriting", "id": id, "caption": pending.destination == .mailReply ? "Opening a reply in Mail…" : "Writing it in \(appName)…"])
         Task { @MainActor in
+            defer { self.isWritingDraft = false }
             do {
+                guard AXIsProcessTrusted() else { throw ScreenContextError.accessibilityNeeded }
+                guard let app = pending.app, !app.isTerminated else { throw ScreenContextError.placeChanged }
+                // The user switched to another app meanwhile: leave them there.
+                let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                guard front == app.processIdentifier || front == ProcessInfo.processInfo.processIdentifier else { throw ScreenContextError.placeChanged }
+
+                let stillThere: @MainActor () -> Bool
                 if pending.destination == .mailReply {
-                    guard let id = pending.mailMessageID else { throw ScreenContextError.noMailSelection }
-                    try ScreenContext.openMailReply(messageID: id)
-                    // Mail needs a moment to open the reply and put the cursor in its body.
-                    try? await Task.sleep(nanoseconds: 900_000_000)
+                    guard let messageID = pending.mailMessageID else { throw ScreenContextError.noMailSelection }
+                    let earlierWindows = DraftCursor.windows(of: app.processIdentifier)
+                    self.releaseKeyboard()
+                    try ScreenContext.openMailReply(messageID: messageID)
+                    stillThere = { self.hasKeyboard(app) && DraftCursor.isBody(inNewWindowOf: app.processIdentifier, notIn: earlierWindows) }
+                    guard await Self.wait(upTo: 8, for: stillThere) else { throw ScreenContextError.mailReplyFailed("its window didn't come to the front") }
+                    // The window can be in front a moment before its body takes typing.
+                    try? await Task.sleep(nanoseconds: 300_000_000)
                 } else {
-                    // Give keyboard focus back to the user's app before pasting.
-                    pending.app?.activate(options: [])
-                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard let cursor = pending.cursor else { throw ScreenContextError.placeChanged }
+                    let userActed = Self.userActed(since: pending.startedAt)
+                    self.releaseKeyboard()
+                    app.activate(options: [])
+                    stillThere = { self.hasKeyboard(app) && cursor.isStillCurrent(in: app, userActed: userActed) }
+                    guard await Self.wait(upTo: 1.5, for: stillThere) else { throw ScreenContextError.placeChanged }
                 }
-                try await ScreenContext.paste(text)
+                try await ScreenContext.paste(text, onlyIf: stillThere)
                 let place = pending.destination == .mailReply ? "a Mail reply" : "your cursor in \(appName)"
-                self.sendCommandToWeb(["action": "draftWritten", "caption": "Written in \(place). Review it and send it yourself."])
+                self.sendCommandToWeb(["action": "draftWritten", "id": id, "caption": "Written in \(place). Review it and send it yourself."])
             } catch {
-                self.sendCommandToWeb(["action": "draftWriteFailed", "error": error.localizedDescription])
+                self.sendCommandToWeb(["action": "draftWriteFailed", "id": id, "error": error.localizedDescription])
             }
+        }
+    }
+
+    /// The panel can hold the keyboard while another app is in front, so activating that app is not
+    /// enough: a ⌘V would still go to the notch. Re-ordering the panel makes macOS give it back.
+    private func releaseKeyboard() {
+        if panel.isKeyWindow {
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+        }
+    }
+
+    /// True when key presses go to `app`: it is in front and neither the notch nor an overlay like
+    /// Spotlight has the keyboard.
+    private func hasKeyboard(_ app: NSRunningApplication) -> Bool {
+        guard !panel.isKeyWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
+        guard let focusedPID = DraftCursor.keyboardOwner() else { return true }
+        return focusedPID == app.processIdentifier
+    }
+
+    private static func userActed(since start: TimeInterval) -> Bool {
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        return [CGEventType.leftMouseDown, .rightMouseDown, .keyDown].contains {
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < elapsed
+        }
+    }
+
+    @MainActor
+    private static func wait(upTo seconds: TimeInterval, for condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            if condition() { return true }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 60_000_000)
         }
     }
 
@@ -717,7 +777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.ignoresMouseEvents = false
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
-        sendCommandToWeb(["action": "toggleExpand"])
+        sendCommandToWeb(["action": "toggleExpand", "byUser": true])
     }
 
     func cyclePrevBot() {
@@ -779,13 +839,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let w = CGFloat((body["width"] as? NSNumber)?.doubleValue ?? 212)
             let h = CGFloat((body["height"] as? NSNumber)?.doubleValue ?? 56)
             hitRectInPanel = NSRect(x: x, y: y, width: w, height: h)
-            let wasOpen = isNotchOpen
+            let wasActive = isNotchActive
             isNotchOpen = (body["isOpen"] as? Bool) ?? false
+            // A notch that opened by itself (a bot replied) never takes the keyboard or the arrow
+            // and Esc keys from the app the user is typing in, until they click it or press ⌥Space.
+            isNotchActive = isNotchOpen && !((body["isPassive"] as? Bool) ?? false)
             isTypingInNotch = (body["isTyping"] as? Bool) ?? false
 
-            updateExpandedNavigationHotKeys(active: isNotchOpen, includeArrows: isNotchOpen && !isTypingInNotch)
+            updateExpandedNavigationHotKeys(active: isNotchActive, includeArrows: isNotchActive && !isTypingInNotch)
 
-            if isNotchOpen && !wasOpen {
+            if isNotchActive && !wasActive && !isWritingDraft {
                 panel.ignoresMouseEvents = false
                 NSApp.activate(ignoringOtherApps: true)
                 panel.makeKeyAndOrderFront(nil)
@@ -811,8 +874,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             rebuildStatusMenu()
 
         case "writeDraft":
-            if let text = body["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                writeDraft(text)
+            if let text = body["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let id = (body["id"] as? NSNumber)?.intValue {
+                writeDraft(text, id: id)
             }
 
         case "screenTask":
@@ -851,9 +915,101 @@ enum ReplyDestination: String {
 }
 
 struct PendingReply {
+    let id: Int
     let app: NSRunningApplication?
     let destination: ReplyDestination
     let mailMessageID: String?
+    /// Where the cursor was at the double tap, for `.cursor`.
+    let cursor: DraftCursor?
+    let startedAt: TimeInterval
+}
+
+/// The text box the user's cursor was in at the double tap, so the draft is only pasted if that
+/// same box, in the same conversation, is what would receive it.
+struct DraftCursor {
+    private let window: AXUIElement
+    private let field: AXUIElement
+    private let spot: DraftSpot
+
+    /// Nil unless the cursor is in a multi-line text box (an email body, a Slack message box).
+    /// Same test as Kai's KaiFocusProbe.
+    static func current(in app: NSRunningApplication) -> DraftCursor? {
+        let pid = app.processIdentifier
+        guard AXIsProcessTrusted(), pid != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(pid)
+        // Chromium browsers expose web page contents only after being asked to.
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        guard let window = element(appElement, kAXFocusedWindowAttribute),
+              let field = element(appElement, kAXFocusedUIElementAttribute),
+              string(field, kAXRoleAttribute) == "AXTextArea" else { return nil }
+        var settable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(field, kAXValueAttribute as CFString, &settable)
+        guard settable.boolValue else { return nil }
+        let spot = DraftSpot(
+            windowTitle: string(window, kAXTitleAttribute) ?? "",
+            pageURL: pageURL(around: field),
+            role: "AXTextArea",
+            labels: [kAXDescriptionAttribute, kAXPlaceholderValueAttribute, "AXDOMIdentifier"].map { string(field, $0) ?? "" }
+        )
+        return DraftCursor(window: window, field: field, spot: spot)
+    }
+
+    func isStillCurrent(in app: NSRunningApplication, userActed: Bool) -> Bool {
+        guard let now = DraftCursor.current(in: app), CFEqual(window, now.window) else { return false }
+        return spot.isSamePlace(as: now.spot, sameField: CFEqual(field, now.field), userActed: userActed)
+    }
+
+    static func windows(of pid: pid_t) -> [AXUIElement] {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &value)
+        return (value as? [AXUIElement]) ?? []
+    }
+
+    /// The reply Mail just opened: a window that wasn't there before, with the cursor in its body
+    /// (not in To or Subject).
+    static func isBody(inNewWindowOf pid: pid_t, notIn earlier: [AXUIElement]) -> Bool {
+        let appElement = AXUIElementCreateApplication(pid)
+        guard let window = element(appElement, kAXFocusedWindowAttribute),
+              !earlier.contains(where: { CFEqual($0, window) }),
+              let field = element(appElement, kAXFocusedUIElementAttribute),
+              let role = string(field, kAXRoleAttribute) else { return false }
+        return role == "AXWebArea" || role == "AXTextArea"
+    }
+
+    /// The app key presses go to, when macOS says.
+    static func keyboardOwner() -> pid_t? {
+        guard let app = element(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute) else { return nil }
+        var pid: pid_t = 0
+        return AXUIElementGetPid(app, &pid) == .success ? pid : nil
+    }
+
+    /// The address of the page a field is in. Slack and Gmail put the open conversation in it.
+    private static func pageURL(around field: AXUIElement) -> String {
+        var node = field
+        for _ in 0..<60 {
+            if string(node, kAXRoleAttribute) == "AXWebArea" {
+                var value: CFTypeRef?
+                AXUIElementCopyAttributeValue(node, kAXURLAttribute as CFString, &value)
+                if let url = value as? URL, !url.absoluteString.isEmpty { return url.absoluteString }
+            }
+            guard let parent = element(node, kAXParentAttribute) else { return "" }
+            node = parent
+        }
+        return ""
+    }
+
+    private static func element(_ from: AXUIElement, _ attribute: String) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(from, attribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    private static func string(_ element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
 }
 
 /// What the double tap read, sent to the local server to draft a reply from.
@@ -879,6 +1035,7 @@ enum ScreenContextError: LocalizedError {
     case mailReadFailed(String)
     case mailReplyFailed(String)
     case pasteFailed
+    case placeChanged
     case nothingFound
     case textChanged
     case replaceFailed
@@ -899,6 +1056,8 @@ enum ScreenContextError: LocalizedError {
             return "Couldn't open a reply in Mail (\(detail)). Click the draft to copy it."
         case .pasteFailed:
             return "The draft couldn't be written into that app. Click it to copy it instead."
+        case .placeChanged:
+            return "You're not where you double-tapped anymore, so nothing was pasted. Click the draft to copy it."
         case .nothingFound:
             return "Couldn't find any readable text on screen."
         case .textChanged:
@@ -1030,12 +1189,10 @@ enum ScreenContext {
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
     @MainActor
-    static func paste(_ text: String) async throws {
+    static func paste(_ text: String, onlyIf stillThere: @MainActor () -> Bool = { true }) async throws {
         guard AXIsProcessTrusted() else { throw ScreenContextError.accessibilityNeeded }
         let pasteboard = NSPasteboard.general
-        let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
-            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-        }
+        let saved = PasteboardSnapshot(pasteboard)
         pasteboard.clearContents()
         // Marked transient so clipboard managers don't keep the draft.
         let item = NSPasteboardItem()
@@ -1046,7 +1203,13 @@ enum ScreenContext {
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false) else {
+            saved.restore(to: pasteboard)
             throw ScreenContextError.pasteFailed
+        }
+        // Last look, right before the key press.
+        guard stillThere() else {
+            saved.restore(to: pasteboard)
+            throw ScreenContextError.placeChanged
         }
         down.flags = .maskCommand
         up.flags = .maskCommand
@@ -1056,31 +1219,7 @@ enum ScreenContext {
         try? await Task.sleep(nanoseconds: 600_000_000)
         // Leave it alone if the user copied something meanwhile.
         guard pasteboard.changeCount == draftChangeCount else { return }
-        pasteboard.clearContents()
-        let restored = saved.map { fields -> NSPasteboardItem in
-            let item = NSPasteboardItem()
-            fields.forEach { item.setData($0.1, forType: $0.0) }
-            return item
-        }
-        if !restored.isEmpty { pasteboard.writeObjects(restored) }
-    }
-
-    /// True when the user's cursor is in a multi-line text box (an email body, a Slack
-    /// message box) — then the draft is written right there. Same test as Kai's KaiFocusProbe.
-    static func focusIsTextArea(pid: pid_t) -> Bool {
-        guard AXIsProcessTrusted(), pid != ProcessInfo.processInfo.processIdentifier else { return false }
-        let appElement = AXUIElementCreateApplication(pid)
-        // Chromium browsers expose web page contents only after being asked to.
-        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
-        let element = focused as! AXUIElement
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        var settable = DarwinBoolean(false)
-        AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
-        return (role as? String) == "AXTextArea" && settable.boolValue
+        saved.restore(to: pasteboard)
     }
 
     // MARK: Slack (Accessibility tree, read-only — skips the draft/message box)
@@ -1393,7 +1532,14 @@ struct PasteboardSnapshot {
 }
 
 // MARK: - Entry Point
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+@main
+enum MausBotNotch {
+    // NSApplication doesn't keep its delegate alive.
+    private static let delegate = AppDelegate()
+
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = delegate
+        app.run()
+    }
+}

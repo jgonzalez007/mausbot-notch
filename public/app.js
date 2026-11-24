@@ -24,6 +24,7 @@ function postNativeMessage(payload) {
 // state.status: "idle" | "sending" | "working" | "needs_approval" | "error"
 const state = {
   expanded: false,
+  passive: false, // open because a bot replied: shown without taking the keyboard
   typing: false,
   bots: [],
   selectedBotId: null,
@@ -90,6 +91,7 @@ function reportHitRectToNative() {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     isOpen: state.expanded,
+    isPassive: state.passive,
     isTyping: state.typing,
     status: state.status,
     botName: bot?.name || "MausBot"
@@ -99,10 +101,14 @@ function reportHitRectToNative() {
 const resizeObserver = new ResizeObserver(() => reportHitRectToNative());
 resizeObserver.observe(dom.pouch);
 
-function setExpanded(expanded) {
+function setExpanded(expanded, { passive = false } = {}) {
   const next = Boolean(expanded);
-  if (state.expanded === next) return;
+  if (state.expanded === next) {
+    if (next && !passive) takeKeyboard();
+    return;
+  }
   state.expanded = next;
+  state.passive = next && passive;
   dom.pouch.dataset.expanded = String(next);
   if (next) {
     refreshBootstrap();
@@ -118,6 +124,13 @@ function setExpanded(expanded) {
     reportHitRectToNative();
     if (++steps > 10) clearInterval(timer);
   }, 35);
+}
+
+// The user touched a notch that had opened by itself: from here on it may have the keyboard.
+function takeKeyboard() {
+  if (!state.passive) return;
+  state.passive = false;
+  reportHitRectToNative();
 }
 
 function setTypingMode(typing, initialChar = "") {
@@ -243,7 +256,8 @@ function handleServerEvent(evt) {
 
   // Don't let bot events overwrite an open result card or a draft being written.
   // A reply that lands meanwhile is shown when the card closes or the notch next opens.
-  if (isCurrent && (state.result || state.drafting)) {
+  const draftToRead = state.copyText && state.expanded;
+  if (isCurrent && (state.result || state.drafting || draftToRead)) {
     if (evt.type === "reply") state.deferredReplyBotId = evt.botId;
     if (evt.type === "reply" || evt.type === "hello") refreshBootstrap();
     return;
@@ -253,7 +267,8 @@ function handleServerEvent(evt) {
     if (isCurrent) {
       state.copyText = ""; // the caption becomes the reply, so a click must not copy an old draft
       // Pop the notch and pull the latest transcript so the caption updates.
-      if (!state.expanded) setExpanded(true);
+      // It must not take the keyboard from whatever the user is typing in.
+      if (!state.expanded) setExpanded(true, { passive: true });
       pollTranscriptOnce(evt.botId);
     }
     // Replies for other bots are kept in state.json; they show when you
@@ -294,6 +309,7 @@ async function sendMessage(text) {
   const bot = getSelectedBot();
   if (!bot) return;
 
+  cancelDraft();
   stopReplyPoll();
   state.copyText = "";
   state.status = "sending";
@@ -369,6 +385,8 @@ async function pollTranscriptOnce(botId) {
 // ============================================================================
 // EVENTS & SHORTCUTS
 // ============================================================================
+
+dom.pouch.addEventListener("pointerdown", takeKeyboard, true);
 
 // Collapsed: click to expand. Expanded: click is disabled via pointer-events:none in CSS.
 dom.collapsedBar.addEventListener("click", () => {
@@ -470,28 +488,51 @@ window.addEventListener("keydown", (e) => {
 // user with the local model, show it, and hand it back to be written into Mail or at the cursor.
 // ============================================================================
 let draftCloseTimer = null;
+// Every double-tap gets an id from the native side. Only the newest one may show or write anything,
+// so a slow draft for one conversation can't land in the next.
+let draftId = 0;
+let draftRequest = null;
 
-async function draftReply(context, destination) {
-  stopReplyPoll();
-  closeResult(false);
+function beginDraft(id) {
+  draftId = id;
+  draftRequest?.abort();
+  draftRequest = null;
   clearTimeout(draftCloseTimer);
   state.copyText = "";
   state.drafting = true;
+}
+
+// The user started something else in the notch: the draft they asked for before must not pop up over
+// it or be pasted behind it.
+function cancelDraft() {
+  if (!state.drafting) return;
+  beginDraft(-1);
+  state.drafting = false;
+}
+
+async function draftReply(id, context, destination) {
+  if (id !== draftId) return;
+  stopReplyPoll();
+  closeResult(false);
   state.status = "working";
   state.statusCaption = context && context.kind === "mail" ? "Writing a reply to this email…" : "Writing a reply…";
   renderPouch();
+  const request = new AbortController();
+  draftRequest = request;
   let res;
   try {
     res = await apiFetch("/api/draft-reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(context || {})
+      body: JSON.stringify(context || {}),
+      signal: request.signal
     }).then((r) => r.json());
   } catch (err) {
     res = { ok: false, error: err.message || "Couldn't write a reply." };
-  } finally {
-    state.drafting = false;
   }
+  if (id !== draftId) return;
+  draftRequest = null;
+  state.drafting = false;
   if (!res.ok) {
     state.status = "error";
     state.statusCaption = res.error || "Couldn't write a reply.";
@@ -500,11 +541,16 @@ async function draftReply(context, destination) {
   }
   state.copyText = res.draft;
   state.status = "idle";
-  state.statusCaption = destination === "awaitingCursor"
+  // Typing a message in the notch right now: taking the keyboard away would be worse than a click.
+  const showOnly = destination === "awaitingCursor" || state.typing;
+  state.statusCaption = showOnly
     ? `${res.draft}\n\n(Click to copy, then paste it in your reply.)`
     : res.draft;
+  if (!showOnly) {
+    state.drafting = true; // until the native side says it was written, or wasn't
+    postNativeMessage({ type: "writeDraft", id, text: res.draft });
+  }
   renderPouch();
-  if (destination !== "awaitingCursor") postNativeMessage({ type: "writeDraft", text: res.draft });
 }
 
 // ============================================================================
@@ -539,6 +585,7 @@ function showRewriteMenu(show) {
 }
 
 function startScreenTask(task, promptId) {
+  cancelDraft();
   stopReplyPoll();
   setTypingMode(false);
   showRewriteMenu(false);
@@ -729,11 +776,14 @@ window.__notchCommand = async (cmd) => {
   if (!cmd || typeof cmd !== "object") return;
   switch (cmd.action) {
     case "toggleExpand":
-      setExpanded(!state.expanded);
+      // ⌥Space on a notch that opened by itself means "let me use it", not "close it".
+      if (state.expanded && state.passive && cmd.byUser) takeKeyboard();
+      else setExpanded(!state.expanded);
       break;
     case "screenAnswerReading":
       // Double-tap ⌘ (bare, no other key): the native side is reading the email, Slack
       // conversation, selected text, clipboard, or screen OCR in front of the user.
+      beginDraft(cmd.id);
       setExpanded(true);
       setTypingMode(false);
       stopReplyPoll();
@@ -743,14 +793,19 @@ window.__notchCommand = async (cmd) => {
       renderPouch();
       break;
     case "draftReply":
-      draftReply(cmd.context, cmd.destination);
+      draftReply(cmd.id, cmd.context, cmd.destination);
       break;
     case "draftWriting":
+      if (cmd.id !== draftId) break;
+      state.passive = state.expanded; // the keyboard goes back to the user's app
+      reportHitRectToNative();
       state.status = "working";
       state.statusCaption = cmd.caption || "Writing…";
       renderPouch();
       break;
     case "draftWritten":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       // Like Kai: say where it went, then get out of the way of the email.
       state.status = "idle";
       state.statusCaption = cmd.caption || "Written. Review it and send it yourself.";
@@ -761,11 +816,15 @@ window.__notchCommand = async (cmd) => {
       }, 2500);
       break;
     case "draftWriteFailed":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       state.status = "idle";
       state.statusCaption = `${cmd.error || "Couldn't write the draft."}\n\n${state.copyText || ""}`.trim();
       renderPouch();
       break;
     case "screenAnswerFailed":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       stopReplyPoll();
       state.status = "error";
       state.statusCaption = cmd.error || "Couldn't read your screen.";

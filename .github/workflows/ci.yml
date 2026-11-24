@@ -26,3 +26,9 @@ jobs:
 
       - name: Smoke test
         run: bash scripts/smoke-test.sh
+
+      - name: Bridge tests
+        run: node scripts/bridge-test.mjs
+
+      - name: Draft destination tests
+        run: bash scripts/swift-test.sh
