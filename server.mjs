@@ -55,14 +55,161 @@ function authTokenMatches(provided) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function extractLaunchAuthToken(req) {
+function extractLaunchAuthToken(req, url) {
   const auth = req.headers.authorization;
   if (typeof auth === "string" && auth.startsWith("Bearer ")) {
     return auth.slice("Bearer ".length);
   }
   const custom = req.headers["x-mausbot-notch-token"];
   if (typeof custom === "string") return custom;
+  // EventSource cannot send Authorization headers, so /api/events (and the
+  // instance-facing /api/notify) also accept the token as a query parameter.
+  // Only the caller decides whether to pass `url` for these two routes.
+  if (url) {
+    const fromQuery = url.searchParams.get("token");
+    if (typeof fromQuery === "string" && fromQuery.length > 0) return fromQuery;
+  }
   return null;
+}
+
+// The optional stable "notify token" from config.json. Unlike the per-launch
+// token, it survives relaunches so a same-host OpenMausBot instance (or a hook
+// script) can push events to /api/notify across restarts. Empty or missing =
+// disabled.
+function notifyTokenValue() {
+  const config = readConfig();
+  if (typeof config.notifyToken === "string" && config.notifyToken.trim().length >= 32) {
+    return config.notifyToken.trim();
+  }
+  return null;
+}
+
+function notifyTokenMatches(provided) {
+  const expected = notifyTokenValue();
+  if (!expected || typeof provided !== "string" || provided.length === 0) return false;
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Server-side poll cadence for pending threads; 10..300 seconds (default 20).
+function pollIntervalMs() {
+  const config = readConfig();
+  const n = Number(config.pollIntervalSec);
+  if (!Number.isFinite(n)) return 20 * 1000;
+  return Math.min(300, Math.max(10, Math.round(n))) * 1000;
+}
+
+const PENDING_STALE_MS = 30 * 60 * 1000; // give up on a pending thread after 30 min
+const RATE_LIMIT_COOLDOWN_MS = 60 * 1000; // Bot API allows 10 calls/min per key
+const RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000;
+
+// ============================================================================
+// INBOUND EVENTS: SSE stream to the notch UI + background thread poller.
+// The Bot API is outbound-only, so "inbound" means: (a) the bridge polls the
+// last known thread of each pending bot so a reply that lands while the notch
+// is closed is captured and surfaced on reopen, and (b) /api/notify accepts
+// pushes from a same-host instance once the Bot API grows a push channel.
+// ============================================================================
+const sseClients = new Set();
+
+function broadcastEvent(event) {
+  if (sseClients.size === 0) return;
+  const frame = `data: ${JSON.stringify(event)}\n\n`;
+  for (const res of sseClients) {
+    try {
+      res.write(frame);
+    } catch {
+      sseClients.delete(res);
+    }
+  }
+}
+
+function handleNotifyPayload(body, res, cors) {
+  const botId = typeof body.botId === "string" ? body.botId.trim() : "";
+  if (!botId) return sendJson(res, 400, { ok: false, error: "Missing botId" }, cors);
+  if (!findBotConfig(botId)) return sendJson(res, 404, { ok: false, error: "Unknown bot" }, cors);
+
+  const state = readState();
+  const entry = botState(state, botId);
+  let event;
+
+  if (typeof body.text === "string" && body.text.trim()) {
+    pushMessage(entry, "assistant", body.text.trim());
+    entry.pending = false;
+    entry.pendingSinceMs = null;
+    event = { type: "reply", botId, preview: body.text.trim().slice(0, 120) };
+  } else if (body.status === "working" || body.status === "needs_approval") {
+    entry.pending = true;
+    entry.pendingSinceMs = Date.now();
+    event = { type: "status", botId, status: body.status };
+  } else {
+    return sendJson(res, 400, { ok: false, error: "Provide text or status (working|needs_approval)" }, cors);
+  }
+
+  writeState(state);
+  broadcastEvent(event);
+  return sendJson(res, 200, { ok: true }, cors);
+}
+
+async function pollPendingThreads() {
+  const config = readConfig();
+  const state = readState();
+  const now = Date.now();
+  let dirty = false;
+
+  for (const bot of config.bots) {
+    const entry = state.bots[bot.id];
+    if (!entry || !entry.pending || !entry.thread) continue;
+
+    if (entry.pendingSinceMs && now - entry.pendingSinceMs > PENDING_STALE_MS) {
+      entry.pending = false;
+      entry.pendingSinceMs = null;
+      dirty = true;
+      broadcastEvent({ type: "timeout", botId: bot.id });
+      continue;
+    }
+    if (entry.backoffUntilMs && now < entry.backoffUntilMs) continue;
+    if (entry.lastPollAtMs && now - entry.lastPollAtMs < RATE_LIMIT_COOLDOWN_MS) continue;
+
+    entry.lastPollAtMs = now;
+    try {
+      const result = await pollBotThread(bot, entry.thread);
+      if (!result.ok) {
+        if (String(result.error).startsWith("Too many calls")) {
+          entry.backoffUntilMs = now + RATE_LIMIT_BACKOFF_MS;
+        }
+      } else if (result.done) {
+        entry.pending = false;
+        entry.pendingSinceMs = null;
+        entry.backoffUntilMs = null;
+        pushMessage(entry, "assistant", result.reply || "");
+        dirty = true;
+        broadcastEvent({ type: "reply", botId: bot.id, preview: (result.reply || "").slice(0, 120) });
+      }
+      // still working: nothing to record, poll again next cycle
+    } catch {
+      // transient network error; retry next cycle
+    }
+    dirty = true; // lastPollAtMs moved
+  }
+
+  if (dirty) writeState(state);
+}
+
+let pollTimer = null;
+function scheduleBackgroundPoll() {
+  if (pollTimer) return;
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    try {
+      await pollPendingThreads();
+    } catch (err) {
+      console.error("[mausbot-notch] Background poll error:", err.message);
+    }
+    scheduleBackgroundPoll();
+  }, pollIntervalMs());
 }
 
 function validateHostAndOrigin(req) {
@@ -143,7 +290,14 @@ function writeState(state) {
 
 function botState(state, botId) {
   if (!state.bots[botId]) {
-    state.bots[botId] = { thread: null, pending: false, messages: [] };
+    state.bots[botId] = {
+      thread: null,
+      pending: false,
+      messages: [],
+      lastPollAtMs: null,
+      backoffUntilMs: null,
+      pendingSinceMs: null
+    };
   }
   return state.bots[botId];
 }
@@ -599,8 +753,15 @@ const server = http.createServer(async (req, res) => {
   const isApiRoute = pathname === "/api" || pathname.startsWith("/api/");
 
   if (isApiRoute) {
-    const token = extractLaunchAuthToken(req);
-    if (!authTokenMatches(token)) {
+    const isNotifyRoute = pathname === "/api/notify";
+    const isEventsRoute = pathname === "/api/events";
+    // Query-param tokens are only consulted on the two routes that need them
+    // (EventSource cannot send Authorization headers).
+    const token = extractLaunchAuthToken(req, isEventsRoute || isNotifyRoute ? parsedUrl : null);
+    // The launch token unlocks every /api route. The notify token only unlocks
+    // /api/notify — never the bootstrap or message routes.
+    const allowed = authTokenMatches(token) || (isNotifyRoute && notifyTokenMatches(token));
+    if (!allowed) {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" }, cors);
     }
   }
@@ -686,6 +847,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!result.ok) {
         freshEntry.pending = false;
+        freshEntry.pendingSinceMs = null;
         pushMessage(freshEntry, "assistant", `⚠️ ${result.error}`);
         writeState(freshState);
         return sendJson(res, 200, { ok: true, status: "error" }, cors);
@@ -693,14 +855,46 @@ const server = http.createServer(async (req, res) => {
 
       if (result.done) {
         freshEntry.pending = false;
+        freshEntry.pendingSinceMs = null;
         pushMessage(freshEntry, "assistant", result.reply || "");
         writeState(freshState);
         return sendJson(res, 200, { ok: true, status: "done" }, cors);
       }
 
       freshEntry.pending = true;
+      freshEntry.pendingSinceMs = Date.now();
       writeState(freshState);
       return sendJson(res, 200, { ok: true, status: result.status }, cors);
+    }
+
+    if (req.method === "GET" && pathname === "/api/events") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        ...cors
+      });
+      res.write("retry: 3000\n\n");
+      res.write(`data: ${JSON.stringify({ type: "hello", bots: getBootstrapData().bots.map((b) => b.id) })}\n\n`);
+      sseClients.add(res);
+      const ping = setInterval(() => {
+        try {
+          res.write(": ping\n\n");
+        } catch {
+          sseClients.delete(res);
+          clearInterval(ping);
+        }
+      }, 25000);
+      req.on("close", () => {
+        clearInterval(ping);
+        sseClients.delete(res);
+      });
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/notify") {
+      const body = await readJsonBody(req);
+      return handleNotifyPayload(body, res, cors);
     }
 
     const transcriptMatch = /^\/api\/bot\/([^/]+)\/transcript$/.exec(pathname);
@@ -714,6 +908,7 @@ const server = http.createServer(async (req, res) => {
 
       if (entry.pending && entry.thread) {
         try {
+          entry.lastPollAtMs = Date.now(); // shared cooldown with the background poller
           const result = await pollBotThread(botConfig, entry.thread);
           if (!result.ok) {
             entry.pending = false;
@@ -766,4 +961,5 @@ ensureConfigFileExists();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[mausbot-notch] MausBot Notch bridge listening on http://127.0.0.1:${PORT}`);
+  scheduleBackgroundPoll();
 });

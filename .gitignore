@@ -1,4 +1,6 @@
 node_modules/
 *.log
 /MausBot Notch.app/
+/dist/
+/.build-release/
 .DS_Store

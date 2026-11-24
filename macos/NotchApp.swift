@@ -6,6 +6,7 @@ import ApplicationServices
 import CoreGraphics
 import Vision
 import ScreenCaptureKit
+import ServiceManagement
 
 // Global reference for Carbon HotKey C callback
 private weak var sharedAppDelegate: AppDelegate?
@@ -699,6 +700,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             menu.addItem(NSMenuItem.separator())
         }
 
+        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        menu.addItem(loginItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let quitItem = NSMenuItem(title: "Quit MausBot Notch", action: #selector(quitApp), keyEquivalent: "q")
         menu.addItem(quitItem)
 
@@ -732,6 +739,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         sendCommandToWeb(["action": "selectBot", "botId": botId])
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+            rebuildStatusMenu()
+        } catch {
+            // Registration can fail when the app runs from an unstable location
+            // (e.g. a fresh build directory). The menu state stays honest.
+            NSLog("[MausBotNotch] Launch-at-login toggle failed: \(error.localizedDescription)")
+            rebuildStatusMenu()
+        }
     }
 
     @objc private func quitApp() {

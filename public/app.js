@@ -106,6 +106,7 @@ function setExpanded(expanded) {
   dom.pouch.dataset.expanded = String(next);
   if (next) {
     refreshBootstrap();
+    showDeferredReply();
   } else {
     setTypingMode(false);
     closeResult();
@@ -206,6 +207,81 @@ function cycleBot(delta) {
 // SEND MESSAGE + POLL FOR REPLY
 // ============================================================================
 let activeReplyPoll = null;
+
+// ============================================================================
+// INBOUND EVENTS: server-sent events from the local bridge.
+// The bridge polls pending bot threads in the background and (once the Bot API
+// grows a push channel) relays /api/notify events, so replies that land while
+// the notch is collapsed or closed still pop the notch and surface.
+// ============================================================================
+let eventSource = null;
+
+function connectEvents() {
+  if (eventSource) return;
+  const token = window.__MAUSBOT_NOTCH_AUTH_TOKEN;
+  if (!token) return; // browser without token: preview mode, no events
+  try {
+    eventSource = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    eventSource.onmessage = (e) => {
+      let evt;
+      try {
+        evt = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      handleServerEvent(evt);
+    };
+  } catch {
+    eventSource = null;
+  }
+}
+
+function handleServerEvent(evt) {
+  if (!evt || typeof evt !== "object" || !evt.type) return;
+
+  const isCurrent = evt.botId ? evt.botId === state.selectedBotId : true;
+
+  // Don't let bot events overwrite an open result card or a draft being written.
+  // A reply that lands meanwhile is shown when the card closes or the notch next opens.
+  if (isCurrent && (state.result || state.drafting)) {
+    if (evt.type === "reply") state.deferredReplyBotId = evt.botId;
+    if (evt.type === "reply" || evt.type === "hello") refreshBootstrap();
+    return;
+  }
+
+  if (evt.type === "reply") {
+    if (isCurrent) {
+      state.copyText = ""; // the caption becomes the reply, so a click must not copy an old draft
+      // Pop the notch and pull the latest transcript so the caption updates.
+      if (!state.expanded) setExpanded(true);
+      pollTranscriptOnce(evt.botId);
+    }
+    // Replies for other bots are kept in state.json; they show when you
+    // cycle to that bot and the notch polls its transcript.
+    refreshBootstrap();
+  } else if (evt.type === "status" && isCurrent) {
+    state.status = evt.status;
+    state.statusCaption = evt.status === "needs_approval" ? "Waiting on your approval…" : "Working…";
+    renderPouch();
+  } else if (evt.type === "timeout" && isCurrent) {
+    if (state.status !== "idle") {
+      state.status = "idle";
+      state.statusCaption = "";
+      renderPouch();
+    }
+  } else if (evt.type === "hello") {
+    refreshBootstrap();
+  }
+}
+
+function showDeferredReply() {
+  const botId = state.deferredReplyBotId;
+  if (!botId || state.result || state.drafting) return;
+  state.deferredReplyBotId = null;
+  if (botId !== state.selectedBotId) return;
+  state.copyText = "";
+  pollTranscriptOnce(botId);
+}
 
 function stopReplyPoll() {
   if (activeReplyPoll) {
@@ -400,6 +476,7 @@ async function draftReply(context, destination) {
   closeResult(false);
   clearTimeout(draftCloseTimer);
   state.copyText = "";
+  state.drafting = true;
   state.status = "working";
   state.statusCaption = context && context.kind === "mail" ? "Writing a reply to this email…" : "Writing a reply…";
   renderPouch();
@@ -412,6 +489,8 @@ async function draftReply(context, destination) {
     }).then((r) => r.json());
   } catch (err) {
     res = { ok: false, error: err.message || "Couldn't write a reply." };
+  } finally {
+    state.drafting = false;
   }
   if (!res.ok) {
     state.status = "error";
@@ -573,7 +652,10 @@ function closeResult(render = true) {
   if (!state.result) return;
   state.result = null;
   state.status = "idle";
-  if (render) renderPouch();
+  if (render) {
+    renderPouch();
+    showDeferredReply();
+  }
 }
 
 function escapeHtml(text) {
@@ -775,6 +857,7 @@ async function init() {
   await refreshBootstrap();
   renderPouch();
   reportHitRectToNative();
+  connectEvents();
   setInterval(refreshBootstrap, 8000);
 }
 
