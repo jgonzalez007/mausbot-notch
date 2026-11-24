@@ -317,9 +317,24 @@ function findBotConfig(botId) {
 // ============================================================================
 function readState() {
   try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    if (typeof parsed._lastClosedAt !== "number") {
+      parsed._lastClosedAt = null;
+      writeState(parsed);
+    }
+    // Migrate existing messages to include unread field.
+    for (const botId of Object.keys(parsed.bots || {})) {
+      const msgs = parsed.bots[botId]?.messages;
+      if (Array.isArray(msgs)) {
+        for (const msg of msgs) {
+          if (msg.unread === undefined) msg.unread = false;
+        }
+        writeState(parsed);
+      }
+    }
+    return parsed;
   } catch {
-    return { selectedBotId: null, bots: {} };
+    return { selectedBotId: null, bots: {}, _lastClosedAt: null };
   }
 }
 
@@ -329,6 +344,15 @@ function writeState(state) {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
   } catch (err) {
     console.error("[mausbot-notch] Failed to write state.json:", err.message);
+  }
+}
+
+function ensureDefaultState() {
+  try {
+    JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    return;
+  } catch {
+    writeState({ selectedBotId: null, bots: {}, _lastClosedAt: null });
   }
 }
 
@@ -351,7 +375,8 @@ function pushMessage(entry, role, text) {
     id: crypto.randomUUID(),
     role,
     text,
-    timestampMs: Date.now()
+    timestampMs: Date.now(),
+    unread: true
   });
   if (entry.messages.length > MAX_MESSAGES_PER_BOT) {
     entry.messages.splice(0, entry.messages.length - MAX_MESSAGES_PER_BOT);
@@ -1019,20 +1044,88 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && pathname === "/api/notify") {
+    // P0 #3: Stop/cancel a pending reply for a bot.
+    // When called, the bridge stops polling that bot's thread and marks it non-pending.
+    if (req.method === "POST" && pathname === "/api/bot/stop") {
       const body = await readJsonBody(req);
-      return handleNotifyPayload(body, res, cors);
+      const botId = typeof body.botId === "string" ? body.botId : "";
+      if (!botId) return sendJson(res, 400, { ok: false, error: "Missing botId" }, cors);
+      const botConfig = findBotConfig(botId);
+      if (!botConfig) return sendJson(res, 404, { ok: false, error: "Unknown bot" }, cors);
+      const state = readState();
+      const entry = state.bots[botId];
+      if (!entry || !entry.pending) return sendJson(res, 200, { ok: true, alreadyStopped: true }, cors);
+      const stopTimeMs = Date.now();
+      entry.pendingSinceMs = entry.pendingSinceMs || stopTimeMs;
+      entry.pending = false;
+      writeState(state);
+      return sendJson(res, 200, {
+        ok: true,
+        stoppedAtMs: entry.pendingSinceMs,
+        elapsedMs: stopTimeMs - entry.pendingSinceMs
+      }, cors);
     }
 
+    // P0 #2: Notch open/close notification from the native side.
+    // Sets _lastClosedAt so that unread tracking starts from when the notch was closed.
+    if (req.method === "POST" && pathname === "/api/notch-state") {
+      const body = await readJsonBody(req);
+      const state = readState();
+      if (typeof body.lastClosedAt === "number") {
+        state._lastClosedAt = body.lastClosedAt;
+        writeState(state);
+      }
+      return sendJson(res, 200, { ok: true, lastClosedAt: state._lastClosedAt || null }, cors);
+    }
+
+    // P0 #1: Transcript view with scroll + copy + timestamps.
+    // Fetches the full message list; marks unread messages as read on first fetch.
     const transcriptMatch = /^\/api\/bot\/([^/]+)\/transcript$/.exec(pathname);
     if (req.method === "GET" && transcriptMatch) {
       const botId = decodeURIComponent(transcriptMatch[1]);
       const botConfig = findBotConfig(botId);
       if (!botConfig) return sendJson(res, 404, { ok: false, error: "Unknown bot" }, cors);
 
+      const state = readState();
+      const entry = state.bots[botId];
+      if (!entry) return sendJson(res, 200, { ok: true, messages: [], pending: false, unreadCount: 0, unreadSinceMs: null }, cors);
+
+      // Mark messages as read on transcript fetch (for this bot, only if notch was closed when they arrived).
+      if (state._lastClosedAt && entry.messages.length > 0) {
+        const lastClosed = state._lastClosedAt;
+        let anyUnread = false;
+        for (const msg of entry.messages) {
+          if (msg.unread && msg.timestampMs > lastClosed) {
+            msg.unread = false;
+            anyUnread = true;
+          }
+        }
+        if (anyUnread) writeState(state);
+      }
+
       await pollPendingBot(botConfig, FOREGROUND_POLL_GAP_MS);
-      const entry = botState(readState(), botId);
-      return sendJson(res, 200, { ok: true, pending: entry.pending, entries: entry.messages.slice(-MAX_MESSAGES_PER_BOT) }, cors);
+      const freshState = readState();
+      const freshEntry = freshState.bots[botId];
+      const messages = freshEntry?.messages || [];
+      const unreadCount = messages.filter((m) => m.unread).length;
+      let unreadSinceMs = null;
+      if (unreadCount > 0) {
+        const firstUnread = messages.find((m) => m.unread);
+        if (firstUnread) unreadSinceMs = firstUnread.timestampMs;
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        pending: freshEntry.pending,
+        pendingSinceMs: freshEntry.pendingSinceMs || null,
+        messages,
+        unreadCount,
+        unreadSinceMs
+      }, cors);
+    }
+
+    if (req.method === "POST" && pathname === "/api/notify") {
+      const body = await readJsonBody(req);
+      return handleNotifyPayload(body, res, cors);
     }
 
     // Serve static files from public/
