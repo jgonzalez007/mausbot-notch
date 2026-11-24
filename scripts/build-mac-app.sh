@@ -25,6 +25,9 @@ swiftc -O \
   -framework Cocoa \
   -framework WebKit \
   -framework Carbon \
+  -framework ApplicationServices \
+  -framework Vision \
+  -framework ScreenCaptureKit \
   "$ROOT_DIR/macos/NotchApp.swift" \
   -o "$MACOS_DIR/MausBotNotch"
 

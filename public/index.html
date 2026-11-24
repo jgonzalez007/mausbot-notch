@@ -18,7 +18,9 @@
           <path d="M0 0H18C8.059 0 0 8.059 0 18V0Z" />
         </svg>
 
-        <!-- COLLAPSED BAR (visible when data-expanded="false") -->
+        <!-- BOT IDENTITY BAR — visible in both collapsed and expanded states -->
+        <!-- In collapsed: fills the chin below the notch, clickable to expand -->
+        <!-- In expanded: sits at the top of the pouch as a non-interactive label -->
         <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand MausBot Notch (⌥Space)">
           <span id="collapsed-mark" class="collapsed-mark"></span>
           <span id="collapsed-name" class="collapsed-name">MausBot</span>
@@ -27,15 +29,44 @@
 
         <!-- EXPANDED POUCH CONTENT -->
         <div id="expanded-content" class="expanded-content">
-          <!-- Top: simple MausBot mark -->
-          <div id="bot-mark-mount" class="bot-mark-mount" aria-hidden="true">
-            <span class="bot-mark"></span>
-          </div>
 
           <!-- Middle: bot name + status caption -->
           <div id="bot-title-block" class="bot-title-block" title="Double-click to collapse">
             <span id="bot-name-label" class="bot-name-label">MausBot</span>
             <span id="bot-status-caption" class="bot-status-caption" hidden></span>
+          </div>
+
+          <!-- Kai OS quick actions on what's on screen / what you're writing -->
+          <div id="action-chips" class="action-chips">
+            <button class="chip" type="button" data-task="summarize" title="Summarize what is showing on your screen">Summarize</button>
+            <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
+            <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
+          </div>
+          <div id="rewrite-menu" class="action-chips" hidden>
+            <button class="chip" type="button" data-prompt="starter-concise">Make it concise</button>
+            <button class="chip" type="button" data-prompt="starter-simple">Explain simply</button>
+            <button class="chip" type="button" data-prompt="starter-bullets">Turn into bullets</button>
+            <button class="chip" type="button" data-prompt="starter-spanish">Translate to Spanish</button>
+            <button id="rewrite-back" class="chip chip-quiet" type="button" title="Back">✕</button>
+          </div>
+
+          <!-- Result card (Summary / Proofread / Rewrite), Kai's KaiResultCard -->
+          <div id="result-view" class="result-view" hidden>
+            <div class="result-header">
+              <span id="result-title" class="result-title"></span>
+              <span class="result-spacer"></span>
+              <button id="result-copy" class="result-btn" type="button" title="Copy">Copy</button>
+              <button id="result-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
+            </div>
+            <div id="result-body" class="result-body">
+              <div id="result-text" class="result-text"></div>
+              <div id="result-notes" class="result-notes"></div>
+            </div>
+            <div class="result-actions">
+              <button id="result-replace" class="chip chip-primary" type="button" hidden>Replace</button>
+              <div id="refine-chips" class="refine-chips"></div>
+            </div>
+            <div id="result-footer" class="result-footer"></div>
           </div>
 
           <!-- Bottom row: < (prev bot) | tap-to-type | > (next bot) -->
