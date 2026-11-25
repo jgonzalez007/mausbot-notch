@@ -67,10 +67,10 @@ body.browser-preview {
   overflow: visible;
 }
 
-/* Expanded state: grows for content */
+/* Kai OS sizes (KaiNotchLayout): the open bar is 540 wide; a result uses the full 560×480 panel. */
 .notch-pouch[data-expanded="true"] {
   width: 540px;
-  height: 300px;
+  height: 200px;
   border-radius: 0 0 30px 30px;
   box-shadow:
     0 10px 24px rgba(0, 0, 0, 0.38),
@@ -79,20 +79,9 @@ body.browser-preview {
     inset -0.5px 0 0 rgba(255, 255, 255, 0.08);
 }
 
-/* Transcript view: taller */
-.notch-pouch[data-expanded="true"][data-view="transcript"] {
-  height: 480px;
-}
-
-/* Double-⌘ draft: a bigger pouch and a caption that wraps and scrolls. */
-.notch-pouch[data-expanded="true"][data-draft="true"] {
-  width: 560px;
-  height: 300px;
-}
-
-/* Kai result: full panel */
-.notch-pouch[data-result="true"][data-view="default"] {
-  height: 480px;
+/* A collapsed pill with something to read widens to fit the preview. */
+.notch-pouch[data-expanded="false"][data-unread="true"] {
+  width: 360px;
 }
 
 /* Concave top ears that blend into the top bezel at y = 0 */
@@ -115,6 +104,9 @@ body.browser-preview {
 
 /* ============================================================================
    BOT IDENTITY BAR
+   Visible in both collapsed AND expanded states.
+   Collapsed: clickable chin below the camera notch.
+   Expanded:  non-interactive label at the top of the pouch (pointer-events off).
    ============================================================================ */
 .collapsed-bar {
   margin-top: var(--notch-height);
@@ -138,6 +130,7 @@ body.browser-preview {
 .notch-pouch[data-expanded="true"] .collapsed-bar {
   cursor: default;
   pointer-events: none;
+  /* Slight separator below the bar */
   border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
   margin-bottom: 2px;
   padding-bottom: 4px;
@@ -152,7 +145,7 @@ body.browser-preview {
   flex-shrink: 0;
 }
 
-/* Breathing animation on the mark when working */
+/* Breathing animation on the mark when working (matches expanded dot) */
 .notch-pouch[data-status="working"] .collapsed-mark,
 .notch-pouch[data-status="needs_approval"] .collapsed-mark {
   animation: markBreathe 1.4s ease-in-out infinite;
@@ -174,6 +167,53 @@ body.browser-preview {
   flex: 1;
 }
 
+.notch-pouch[data-expanded="false"][data-unread="true"] .collapsed-name {
+  flex: 0 0 auto;
+}
+
+.collapsed-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  text-align: left;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collapsed-unread {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bot-ink);
+  color: #000000;
+  font: 600 10px/15px -apple-system, BlinkMacSystemFont, sans-serif;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* One dot, in its own color, per other bot with an unread reply */
+.collapsed-others {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.collapsed-others span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.collapsed-preview[hidden],
+.collapsed-unread[hidden],
+.notch-pouch[data-expanded="true"] .collapsed-preview,
+.notch-pouch[data-expanded="true"] .collapsed-unread {
+  display: none !important;
+}
+
 .collapsed-dot {
   width: 6px;
   height: 6px;
@@ -192,7 +232,7 @@ body.browser-preview {
   background: #f04444;
 }
 
-/* In expanded state the dot is redundant */
+/* In expanded state the dot is redundant (dots in the bottom row serve the same purpose) */
 .notch-pouch[data-expanded="true"] .collapsed-dot {
   display: none;
 }
@@ -202,44 +242,9 @@ body.browser-preview {
   50% { opacity: 1; transform: scale(1.15); }
 }
 
-/* P0 #2: Unread badge on the collapsed pill */
-.collapsed-unread-badge {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--bot-ink);
-  flex-shrink: 0;
-  animation: pulseDot 1.1s ease-in-out infinite;
-}
-
-.collapsed-unread-badge[hidden] {
-  display: none !important;
-}
-
-/* P0 #2: Last-reply preview on the collapsed pill */
-.collapsed-preview {
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-  flex-shrink: 0;
-}
-
-.collapsed-preview[hidden] {
-  display: none !important;
-}
-
-/* In expanded state, hide badge and preview (notch name serves as label) */
-.notch-pouch[data-expanded="true"] .collapsed-unread-badge,
-.notch-pouch[data-expanded="true"] .collapsed-preview {
-  display: none !important;
-}
-
 /* ============================================================================
    EXPANDED POUCH CONTENT
+   Sits below the identity bar; uses the remaining height.
    ============================================================================ */
 .expanded-content {
   display: none;
@@ -247,7 +252,9 @@ body.browser-preview {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  /* flex: 1 so it fills whatever height remains after the bar */
   flex: 1;
+  min-height: 0;
   padding: 8px 16px 15px;
 }
 
@@ -297,7 +304,7 @@ body.browser-preview {
   text-overflow: ellipsis;
 }
 
-/* Double-⌘ draft: bigger pouch, caption wraps and scrolls */
+/* Double-⌘ draft: a bigger pouch and a caption that wraps and scrolls. */
 .notch-pouch[data-expanded="true"][data-draft="true"] {
   width: 560px;
   height: 300px;
@@ -327,230 +334,7 @@ body.browser-preview {
   display: none !important;
 }
 
-/* P0 #1: View switcher */
-.view-switcher {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 6px;
-}
-
-.view-switcher.hidden {
-  display: none !important;
-}
-
-/* P0 #1: View panels (default and transcript) - mutually exclusive */
-.view-panel {
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  flex: 1;
-  min-height: 0;
-}
-
-.view-panel.visible {
-  display: flex;
-}
-
-.view-panel.hidden {
-  display: none !important;
-}
-
-/* P0 #3: Stop button area */
-.stop-area {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  margin-bottom: 4px;
-}
-
-.stop-area.hidden {
-  display: none !important;
-}
-
-.stop-btn {
-  font-size: 11px;
-}
-
-.stop-elapsed {
-  font-size: 10px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-/* ============================================================================
-   KAI QUICK ACTIONS
-   ============================================================================ */
-.action-chips {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-}
-
-.action-chips[hidden],
-.result-view[hidden],
-.chip[hidden] {
-  display: none !important;
-}
-
-.chip {
-  height: 24px;
-  padding: 0 11px;
-  border-radius: 999px;
-  border: 0.5px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
-  font: 500 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
-}
-
-.chip:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #ffffff;
-}
-
-.chip:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.chip-quiet {
-  background: transparent;
-  border-color: transparent;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.chip-primary {
-  background: var(--bot-ink);
-  border-color: transparent;
-  color: #000000;
-}
-
-.chip-primary:hover {
-  background: var(--bot-ink);
-  color: #000000;
-  filter: brightness(1.1);
-}
-
-/* Result card: the whole 560×480 panel */
-.notch-pouch[data-result="true"] .bot-title-block,
-.notch-pouch[data-result="true"] .action-chips,
-.notch-pouch[data-result="true"] .bottom-nav-row {
-  display: none !important;
-}
-
-/* P0 #1: Transcript view - scrollable message list */
-.transcript-container {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 4px 8px;
-  gap: 6px;
-  scroll-behavior: smooth;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* Custom scrollbar */
-.transcript-container::-webkit-scrollbar {
-  width: 4px;
-}
-
-.transcript-container::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.transcript-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 2px;
-}
-
-.transcript-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-.transcript-msg {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  max-width: 90%;
-  align-self: flex-start;
-}
-
-.transcript-msg.user {
-  align-self: flex-end;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.transcript-msg.pending {
-  background: transparent;
-  border: 0.5px dashed rgba(255, 255, 255, 0.15);
-}
-
-.transcript-msg-time {
-  font-size: 9px;
-  color: var(--text-muted);
-  align-self: flex-end;
-}
-
-.transcript-msg.user .transcript-msg-time {
-  align-self: flex-start;
-}
-
-.transcript-msg-text {
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-.transcript-msg.unread-marker::before {
-  content: "";
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--bot-ink);
-  margin-right: 4px;
-  vertical-align: middle;
-}
-
-.transcript-msg.empty-msg {
-  background: transparent;
-  align-self: center;
-}
-
-.transcript-msg.empty-msg .transcript-msg-text {
-  color: var(--text-muted);
-  font-size: 11px;
-  text-align: center;
-}
-
-/* Transcript footer with copy button */
-.transcript-footer {
-  display: flex;
-  justify-content: center;
-  padding: 4px 0 2px;
-  flex-shrink: 0;
-}
-
-/* ============================================================================
-   BOTTOM NAV ROW
-   ============================================================================ */
+/* Bottom row: < (prev bot) | tap-to-type | > (next bot) */
 .bottom-nav-row {
   display: flex;
   align-items: center;
@@ -644,7 +428,7 @@ body.browser-preview {
   50% { transform: translateY(-3px); opacity: 1; }
 }
 
-/* Inline type input */
+/* Inline type input — left-aligned text starting at the left edge */
 .type-form {
   width: 100%;
   height: 30px;
@@ -679,8 +463,84 @@ body.browser-preview {
 }
 
 /* ============================================================================
-   RESULT CARD (Kai OS)
+   KAI QUICK ACTIONS: Summarize · Proofread · Rewrite ▾
    ============================================================================ */
+.action-chips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.action-chips[hidden],
+.stop-area[hidden],
+.transcript-view[hidden],
+.result-view[hidden],
+.chip[hidden] {
+  display: none !important;
+}
+
+.chip {
+  height: 24px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 0.5px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  font: 500 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.chip:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+.chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chip-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.chip-primary {
+  background: var(--bot-ink);
+  border-color: transparent;
+  color: #000000;
+}
+
+.chip-primary:hover {
+  background: var(--bot-ink);
+  color: #000000;
+  filter: brightness(1.1);
+}
+
+/* Result card: the whole 560×480 panel */
+.notch-pouch[data-expanded="true"][data-result="true"] {
+  width: 560px;
+  height: 480px;
+}
+
+.notch-pouch[data-expanded="true"][data-view="transcript"] {
+  width: 560px;
+  height: 480px;
+}
+
+.notch-pouch[data-view="transcript"] .bot-title-block,
+.notch-pouch[data-view="transcript"] .action-chips,
+.notch-pouch[data-result="true"] .bot-title-block,
+.notch-pouch[data-result="true"] .action-chips,
+.notch-pouch[data-result="true"] .bottom-nav-row {
+  display: none !important;
+}
+
 .result-view {
   display: flex;
   flex-direction: column;
@@ -787,13 +647,89 @@ body.browser-preview {
   padding: 0 4px;
 }
 
-/* P0 #1: Transcript-specific result adjustments */
-.notch-pouch[data-view="transcript"] .result-view {
-  max-height: 100%;
+/* ============================================================================
+   TRANSCRIPT + STOP WAITING
+   ============================================================================ */
+.stop-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-/* P0 #3: Hide stop button when not working */
-.notch-pouch[data-status="idle"] .stop-area,
-.notch-pouch[data-status="error"] .stop-area {
-  display: none !important;
+.stop-elapsed {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.transcript-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.transcript-empty {
+  margin: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.transcript-msg {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.transcript-msg.user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.transcript-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.transcript-msg.unread .transcript-meta::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--bot-ink);
+}
+
+.transcript-meta .result-btn {
+  margin-left: auto;
+  padding: 2px 4px;
+  font-size: 10px;
+}
+
+.transcript-text {
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
 }

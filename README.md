@@ -172,6 +172,12 @@ Click the notch to open it (540 wide, Kai's size). Three buttons sit under the b
 
 Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the same local model, so nothing leaves this Mac.
 
+## 💬 Transcript, unread replies, Stop waiting
+
+- **Transcript** (next to the three buttons) shows the kept conversation with this bot: scroll, times, Copy on each message and Copy all. Esc or × closes it.
+- **Unread replies**: the collapsed notch shows the latest unread reply and a count for the current bot, plus a dot when another bot has one. Opening the reply marks it read.
+- **Stop waiting** appears with the elapsed time while a reply is on its way. It ends the notch's wait only: the Bot API has no way to cancel a run, so the bot may still finish in OpenMausBot.
+
 ## 🔐 macOS permissions (double-⌘)
 
 Double-⌘ needs these, in System Settings → Privacy & Security:
@@ -205,12 +211,14 @@ mausbot-notch/
 ├── server.mjs                # Local Node.js bridge to the OpenMausBot Bot API (+ SSE, /api/notify, background poller)
 ├── config.example.json       # Template copied to the real bots config on first setup
 ├── install.sh                # Release installer: download DMG → /Applications → launch
-├── .github/workflows/        # ci.yml (build + smoke test), release.yml (tag → universal DMG release)
+├── .github/workflows/        # ci.yml (build + tests), release.yml (tag → universal DMG release)
 └── scripts/
     ├── setup.sh               # Prerequisite check, config template, build & launch
     ├── build-mac-app.sh        # Compiles the Swift binary & signs MausBot Notch.app
     ├── make-release.sh         # Universal (arm64 + x86_64) build + DMG + sha256
     ├── smoke-test.sh           # Boots the bridge in a throwaway HOME; asserts auth, Host/Origin, SSE
+    ├── bridge-test.mjs         # Bridge against a fake Bot API: replies, stop, unread
+    ├── ui-test.mjs             # Opens the notch screen and presses every button (ui-host.swift, ui-test-page.js)
     └── launch.sh               # Starts the local bridge server & opens MausBot Notch.app
 ```
 
@@ -227,7 +235,7 @@ mausbot-notch/
    seconds, which at most every 8 seconds re-checks `GET {baseUrl}/hooks/api/bots/<id>/messages?thread=<id>`
    until a reply lands.
 4. Replies and errors are kept, per bot, in
-   `~/Library/Application Support/MausBot Notch/state.json` (the last 20
+   `~/Library/Application Support/MausBot Notch/state.json` (the last 100
    messages), so switching bots and reopening the notch shows the latest
    status again.
 

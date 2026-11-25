@@ -30,5 +30,8 @@ jobs:
       - name: Bridge tests
         run: node scripts/bridge-test.mjs
 
+      - name: Screen tests (presses every button)
+        run: node scripts/ui-test.mjs
+
       - name: Draft destination tests
         run: bash scripts/swift-test.sh

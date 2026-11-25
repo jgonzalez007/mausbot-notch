@@ -9,7 +9,7 @@
   <body>
     <div id="notch-stage" class="notch-stage">
       <!-- Single U-shaped black Notch pouch (starts collapsed, expands downward on click or ⌥Space) -->
-      <div id="notch-pouch" class="notch-pouch" data-expanded="false" data-status="idle" data-typing="false" data-view="default" data-unread="false">
+      <div id="notch-pouch" class="notch-pouch" data-expanded="false" data-status="idle" data-typing="false">
         <!-- Top-flush concave notch ears at y = 0 -->
         <svg class="notch-ear notch-ear-left" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
           <path d="M18 0H0C9.941 0 18 8.059 18 18V0Z" />
@@ -24,9 +24,10 @@
         <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand MausBot Notch (⌥Space)">
           <span id="collapsed-mark" class="collapsed-mark"></span>
           <span id="collapsed-name" class="collapsed-name">MausBot</span>
-          <span id="collapsed-dot" class="collapsed-dot" aria-hidden="true"></span>
-          <span id="collapsed-unread-badge" class="collapsed-unread-badge" hidden></span>
           <span id="collapsed-preview" class="collapsed-preview" hidden></span>
+          <span id="collapsed-others" class="collapsed-others"></span>
+          <span id="collapsed-unread" class="collapsed-unread" hidden></span>
+          <span id="collapsed-dot" class="collapsed-dot" aria-hidden="true"></span>
         </button>
 
         <!-- EXPANDED POUCH CONTENT -->
@@ -38,60 +39,55 @@
             <span id="bot-status-caption" class="bot-status-caption" hidden></span>
           </div>
 
-          <!-- P0 #1: View switcher (default | transcript) -->
-          <div id="view-switcher" class="view-switcher" hidden>
-            <button id="view-default" class="chip chip-quiet" type="button">Notch</button>
-            <button id="view-transcript" class="chip chip-quiet" type="button">Transcript</button>
+          <!-- Shown while waiting for a bot's reply -->
+          <div id="stop-area" class="stop-area" hidden>
+            <span id="stop-elapsed" class="stop-elapsed"></span>
+            <button id="stop-btn" class="chip" type="button" title="Stop waiting for this reply. The bot itself may still finish it.">Stop waiting</button>
           </div>
 
-          <!-- Default view: actions + status + input -->
-          <div id="view-default-panel" class="view-panel">
-            <!-- Kai OS quick actions on what's on screen / what you're writing -->
-            <div id="action-chips" class="action-chips">
-              <button class="chip" type="button" data-task="summarize" title="Summarize what is showing on your screen">Summarize</button>
-              <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
-              <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
-            </div>
-            <div id="rewrite-menu" class="action-chips" hidden>
-              <button class="chip" type="button" data-prompt="starter-concise">Make it concise</button>
-              <button class="chip" type="button" data-prompt="starter-simple">Explain simply</button>
-              <button class="chip" type="button" data-prompt="starter-bullets">Turn into bullets</button>
-              <button class="chip" type="button" data-prompt="starter-spanish">Translate to Spanish</button>
-              <button id="rewrite-back" class="chip chip-quiet" type="button" title="Back">✕</button>
-            </div>
-
-            <!-- Result card (Summary / Proofread / Rewrite), Kai's KaiResultCard -->
-            <div id="result-view" class="result-view" hidden>
-              <div class="result-header">
-                <span id="result-title" class="result-title"></span>
-                <span class="result-spacer"></span>
-                <button id="result-copy" class="result-btn" type="button" title="Copy">Copy</button>
-                <button id="result-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
-              </div>
-              <div id="result-body" class="result-body">
-                <div id="result-text" class="result-text"></div>
-                <div id="result-notes" class="result-notes"></div>
-              </div>
-              <div class="result-actions">
-                <button id="result-replace" class="chip chip-primary" type="button" hidden>Replace</button>
-                <div id="refine-chips" class="refine-chips"></div>
-              </div>
-              <div id="result-footer" class="result-footer"></div>
-            </div>
-
-            <!-- P0 #3: Stop button (shown when bot is working) -->
-            <div id="stop-area" class="stop-area" hidden>
-              <button id="stop-btn" class="chip chip-primary stop-btn" type="button" title="Stop the bot's reply">Stop</button>
-              <span id="stop-elapsed" class="stop-elapsed"></span>
-            </div>
+          <!-- Kai OS quick actions on what's on screen / what you're writing -->
+          <div id="action-chips" class="action-chips">
+            <button class="chip" type="button" data-task="summarize" title="Summarize what is showing on your screen">Summarize</button>
+            <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
+            <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
+            <button id="transcript-chip" class="chip chip-quiet" type="button" title="Show the conversation with this bot">Transcript</button>
+          </div>
+          <div id="rewrite-menu" class="action-chips" hidden>
+            <button class="chip" type="button" data-prompt="starter-concise">Make it concise</button>
+            <button class="chip" type="button" data-prompt="starter-simple">Explain simply</button>
+            <button class="chip" type="button" data-prompt="starter-bullets">Turn into bullets</button>
+            <button class="chip" type="button" data-prompt="starter-spanish">Translate to Spanish</button>
+            <button id="rewrite-back" class="chip chip-quiet" type="button" title="Back">✕</button>
           </div>
 
-          <!-- P0 #1: Transcript view panel -->
-          <div id="view-transcript-panel" class="view-panel view-transcript hidden">
-            <div id="transcript-container" class="transcript-container"></div>
-            <div id="transcript-footer" class="transcript-footer">
-              <button id="transcript-copy" class="chip chip-quiet" type="button">Copy All</button>
+          <!-- Result card (Summary / Proofread / Rewrite), Kai's KaiResultCard -->
+          <div id="result-view" class="result-view" hidden>
+            <div class="result-header">
+              <span id="result-title" class="result-title"></span>
+              <span class="result-spacer"></span>
+              <button id="result-copy" class="result-btn" type="button" title="Copy">Copy</button>
+              <button id="result-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
             </div>
+            <div id="result-body" class="result-body">
+              <div id="result-text" class="result-text"></div>
+              <div id="result-notes" class="result-notes"></div>
+            </div>
+            <div class="result-actions">
+              <button id="result-replace" class="chip chip-primary" type="button" hidden>Replace</button>
+              <div id="refine-chips" class="refine-chips"></div>
+            </div>
+            <div id="result-footer" class="result-footer"></div>
+          </div>
+
+          <!-- Conversation with the selected bot -->
+          <div id="transcript-view" class="transcript-view" hidden>
+            <div class="result-header">
+              <span class="result-title">Transcript</span>
+              <span class="result-spacer"></span>
+              <button id="transcript-copy" class="result-btn" type="button" title="Copy the whole conversation">Copy all</button>
+              <button id="transcript-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
+            </div>
+            <div id="transcript-list" class="transcript-list"></div>
           </div>
 
           <!-- Bottom row: < (prev bot) | tap-to-type | > (next bot) -->

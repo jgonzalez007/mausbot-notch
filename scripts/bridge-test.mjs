@@ -55,8 +55,8 @@ const modelApi = await listen(async (req, res, body) => {
 
 const CONFIG = path.join(SUPPORT, "config.json");
 const STATE = path.join(SUPPORT, "state.json");
-const writeConfig = (reply) => fs.writeFileSync(CONFIG, JSON.stringify({
-  pollIntervalSec: 300, bots: [{ name: "B", id: "b", key: "k", baseUrl: botApi.url }], reply
+const writeConfig = (reply, key = "k") => fs.writeFileSync(CONFIG, JSON.stringify({
+  pollIntervalSec: 300, bots: [{ name: "B", id: "b", key, baseUrl: botApi.url }], reply
 }));
 writeConfig({ openaiUrl: `${modelApi.url}/v1`, model: "m" });
 
@@ -126,6 +126,48 @@ try {
   for (let i = 0; i < 20; i++) { setPending(); await transcript(); }
   assert.ok(bot.gets <= 8, `made ${bot.gets} polls`);
   ok("polling never uses the last calls of the minute");
+
+  // --- Stop waiting and unread ---
+  const bots = () => api("/api/bootstrap").then((r) => r.json()).then((b) => b.bots[0]);
+  bot.onPost = () => {}; // never answers
+  setPending({ pending: false, pendingSinceMs: null });
+  const sending = post("/api/bot/b/message", { text: "slow one" });
+  await sleep(300);
+  assert.ok((await bots()).waitingSinceMs > 0);
+  await post("/api/bot/b/stop", {});
+  assert.equal((await sending).status, "stopped");
+  assert.equal((await bots()).waitingSinceMs, null);
+  ok("stopping ends a message that is still being sent");
+
+  bot.onGet = async (res) => { await sleep(400); json(res, 200, { reply: "too late", thread: "t1" }); };
+  writeConfig({ openaiUrl: `${modelApi.url}/v1`, model: "m" }, "k2"); // a key with calls left this minute
+  bot.gets = 0;
+  setPending();
+  const polling = transcript();
+  await sleep(100);
+  await post("/api/bot/b/stop", {});
+  t = await polling;
+  assert.equal(bot.gets, 1);
+  assert.equal(t.pending, false);
+  assert.deepEqual(t.entries, []);
+  ok("a reply that lands after stopping is dropped");
+
+  await post("/api/notify", { botId: "b", text: "one" });
+  const first = (await transcript()).entries.at(-1);
+  await post("/api/notify", { botId: "b", text: "two" });
+  assert.equal((await bots()).unreadCount, 2);
+  await post("/api/bot/b/read", { lastMessageId: first.id });
+  assert.equal((await bots()).unreadCount, 1);
+  assert.equal((await bots()).lastReplyPreview, "two");
+  await post("/api/bot/b/read", { lastMessageId: "gone" });
+  assert.equal((await bots()).unreadCount, 1);
+  ok("only replies that were shown become read");
+
+  for (const route of ["stop", "read"]) {
+    assert.equal((await fetch(`${BASE}/api/bot/b/${route}`, { method: "POST" })).status, 401);
+    assert.equal((await api(`/api/bot/nope/${route}`, { method: "POST", body: "{}" })).status, 404);
+  }
+  ok("stop and read need the launch token and a known bot");
 
   // --- Model choice ---
   let d = await draft();
