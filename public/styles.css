@@ -84,6 +84,15 @@ body.browser-preview {
   width: 360px;
 }
 
+/* A reply that just landed: a wider preview for a few seconds, still closed. */
+.notch-pouch[data-expanded="false"][data-peek="true"] {
+  width: 460px;
+}
+
+.notch-pouch[data-peek="true"] .collapsed-preview {
+  color: var(--text-primary);
+}
+
 /* Concave top ears that blend into the top bezel at y = 0 */
 .notch-ear {
   position: absolute;
@@ -481,6 +490,28 @@ body.browser-preview {
   display: none !important;
 }
 
+/* Rewrite ▾ with presets of your own: they wrap under the built-in ones and scroll if there are many. */
+.rewrite-menu {
+  flex-wrap: wrap;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rewrite-mine {
+  display: contents;
+}
+
+.notch-pouch[data-expanded="true"][data-rewrite="true"][data-presets="true"] {
+  height: 260px;
+}
+
+.rewrite-menu .chip {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 22px;
+}
+
 .chip {
   height: 24px;
   padding: 0 11px;
@@ -502,6 +533,11 @@ body.browser-preview {
 .chip:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+#settings-chip {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .chip-quiet {

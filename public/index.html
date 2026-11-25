@@ -8,7 +8,7 @@
   </head>
   <body>
     <div id="notch-stage" class="notch-stage">
-      <!-- Single U-shaped black Notch pouch (starts collapsed, expands downward on click or ⌥Space) -->
+      <!-- Single U-shaped black Notch pouch (starts collapsed, expands downward on click or the shortcut) -->
       <div id="notch-pouch" class="notch-pouch" data-expanded="false" data-status="idle" data-typing="false">
         <!-- Top-flush concave notch ears at y = 0 -->
         <svg class="notch-ear notch-ear-left" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -21,7 +21,7 @@
         <!-- BOT IDENTITY BAR — visible in both collapsed and expanded states -->
         <!-- In collapsed: fills the chin below the notch, clickable to expand -->
         <!-- In expanded: sits at the top of the pouch as a non-interactive label -->
-        <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand MausBot Notch (⌥Space)">
+        <button id="collapsed-bar" class="collapsed-bar" type="button" title="Open MausBot Notch">
           <span id="collapsed-mark" class="collapsed-mark"></span>
           <span id="collapsed-name" class="collapsed-name">MausBot</span>
           <span id="collapsed-preview" class="collapsed-preview" hidden></span>
@@ -51,12 +51,15 @@
             <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
             <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
             <button id="transcript-chip" class="chip chip-quiet" type="button" title="Show the conversation with this bot">Transcript</button>
+            <button id="settings-chip" class="chip chip-quiet" type="button" aria-label="Settings" title="Settings">⚙</button>
           </div>
-          <div id="rewrite-menu" class="action-chips" hidden>
+          <div id="rewrite-menu" class="action-chips rewrite-menu" hidden>
             <button class="chip" type="button" data-prompt="starter-concise">Make it concise</button>
             <button class="chip" type="button" data-prompt="starter-simple">Explain simply</button>
             <button class="chip" type="button" data-prompt="starter-bullets">Turn into bullets</button>
             <button class="chip" type="button" data-prompt="starter-spanish">Translate to Spanish</button>
+            <div id="rewrite-mine" class="rewrite-mine"></div>
+            <button id="rewrite-edit" class="chip chip-quiet" type="button" title="Add or change your own presets">Edit…</button>
             <button id="rewrite-back" class="chip chip-quiet" type="button" title="Back">✕</button>
           </div>
 

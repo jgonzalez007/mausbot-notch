@@ -1,57 +1,5 @@
 // Runs inside the notch page (see ui-host.swift). Every press goes through the spot on screen where
 // the button is, so a button that is hidden, covered or not wired up fails.
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = [];
-const pressed = new Set();
-const $ = (sel) => document.querySelector(sel);
-const ok = (name) => log.push(`ok   - ${name}`);
-const fail = (why) => { throw new Error([...log, why, ...window.__errors].join("\n")); };
-const check = (cond, why) => { if (!cond) fail(why); };
-const until = async (cond, why) => {
-  for (let i = 0; i < 60; i++) { if (cond()) return; await sleep(50); }
-  fail(`never happened: ${why}`);
-};
-const visible = (el) => {
-  if (!el) return false;
-  const r = el.getBoundingClientRect();
-  if (!r.width || !r.height) return false;
-  const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-  return Boolean(top && (el === top || el.contains(top)));
-};
-const buttonName = (b) => b.id || b.dataset.task || b.dataset.prompt || (b.closest("#refine-chips") ? "refine" : "row-copy");
-const press = async (target, why = target) => {
-  const el = typeof target === "string" ? $(target) : target;
-  await until(() => visible(el) && !el.disabled, `${why} can be pressed`);
-  if (el.matches("button")) pressed.add(buttonName(el)); // before the click, which may replace it
-  const r = el.getBoundingClientRect();
-  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-  hit.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
-  hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  await sleep(30);
-};
-const key = (k) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
-const native = (cmd) => window.__notchCommand(cmd);
-const sentSince = (n, type) => window.__sent.slice(n).find((m) => m.type === type);
-const copies = async (target) => {
-  const n = window.__sent.length;
-  await press(target);
-  await until(() => sentSince(n, "copyToClipboard"), `${target} copies`);
-  return sentSince(n, "copyToClipboard").text;
-};
-const notify = (botId, body) => fetch("/api/notify", {
-  method: "POST",
-  headers: { Authorization: `Bearer ${window.__MAUSBOT_NOTCH_AUTH_TOKEN}`, "Content-Type": "application/json" },
-  body: JSON.stringify({ botId, ...body })
-});
-const say = async (text) => {
-  await press("#tap-to-type-btn");
-  $("#type-input").value = text;
-  $("#type-form").requestSubmit();
-};
-const caption = () => ($("#bot-status-caption").hidden ? "" : $("#bot-status-caption").textContent);
-const collapse = async () => { native({ action: "escape" }); await until(() => $("#notch-pouch").dataset.expanded === "false", "collapses"); };
-const shot = (name) => webkit.messageHandlers.snapshot.postMessage(name);
-
 document.head.insertAdjacentHTML("beforeend", "<style>*{transition:none!important;animation:none!important}</style>");
 await until(() => $("#collapsed-name").textContent === "Ann", "the first bot's name shows");
 check(sentSince(0, "rosterLoaded"), "the bots reach the menu bar");
@@ -97,13 +45,36 @@ await press("#rewrite-chip");
 await shot("3-rewrite");
 await press("#rewrite-back");
 check(visible($("#rewrite-chip")), "back returns to the buttons");
-for (const prompt of ["starter-concise", "starter-simple", "starter-bullets", "starter-spanish"]) {
+for (const prompt of ["starter-concise", "starter-simple", "starter-bullets", "starter-spanish", "mine", "all"]) {
   await press("#rewrite-chip");
   await press(`[data-prompt=${prompt}]`);
   await runTask("rewrite", true);
   await press("#result-close");
 }
-ok("Rewrite and its four choices");
+ok("Rewrite, its four choices and the person's own");
+
+await press("#rewrite-chip");
+check([...$("#rewrite-mine").children].map((b) => b.textContent).join() === "Tenant reply,For everyone <b>", "only this bot's and everyone's presets show");
+await press("#next-bot-btn");
+check($("#rewrite-mine").textContent.startsWith("Only Ben's"), "the other bot has its own");
+if (!visible($("#rewrite-back"))) await press("#rewrite-chip");
+await press("[data-prompt=bens]");
+await until(() => $("#result-title").textContent === "Only Ben's", "its own preset is used");
+await runTask("rewrite", true);
+await press("#result-close");
+await press("#prev-bot-btn");
+n = window.__sent.length;
+if (!visible($("#rewrite-edit"))) await press("#rewrite-chip");
+await press("#rewrite-edit");
+await until(() => sentSince(n, "openSettings")?.tab === "presets", "Edit opens the presets in Settings");
+await until(() => $("#notch-pouch").dataset.expanded === "false", "Settings closes the notch");
+await press("#collapsed-bar");
+if (visible($("#rewrite-back"))) await press("#rewrite-back");
+n = window.__sent.length;
+await press("#settings-chip");
+await until(() => sentSince(n, "openSettings")?.tab === "bots", "the gear opens Settings");
+await press("#collapsed-bar");
+ok("presets per bot, Edit and the Settings button");
 
 // --- Talking to a bot ---
 key("t");
@@ -167,19 +138,47 @@ ok("transcript, copying, scrolling and closing");
 // --- Unread ---
 await collapse();
 await notify("a", { text: "Rent is paid for Egger." });
-await until(() => $("#notch-pouch").dataset.expanded === "true" && caption() === "Rent is paid for Egger.", "a reply opens the notch");
-native({ action: "toggleExpand" });
-await until(() => visible($("#collapsed-unread")), "an untouched reply stays unread");
+await until(() => visible($("#collapsed-unread")), "a reply shows as unread");
+await sleep(300);
+check($("#notch-pouch").dataset.expanded === "false", "a reply leaves the notch closed");
+check($("#notch-pouch").dataset.peek === "true", "a reply is previewed");
 check($("#collapsed-unread").textContent === "1" && $("#collapsed-preview").textContent === "Rent is paid for Egger.", "count and preview");
 await notify("b", { text: "Pool is at 84." });
-await until(() => $("#collapsed-others").children.length === 1, "another bot's reply shows as its dot");
-await shot("6-unread");
+await until(() => $("#collapsed-name").textContent === "Ben" && $("#collapsed-preview").textContent === "Pool is at 84.", "another bot's reply is previewed under its name");
+check($("#collapsed-others").children.length === 1, "the first bot's unread reply shows as its dot");
+await shot("6-preview");
+await sleep(7300);
+check($("#collapsed-name").textContent === "Ann" && $("#notch-pouch").dataset.peek === "false", "the preview gives way to the selected bot");
+check($("#collapsed-others").children.length === 1 && visible($("#collapsed-unread")), "its count and the other bot's dot stay");
+await shot("7-unread");
 await press("#collapsed-bar");
 await until(() => caption() === "Rent is paid for Egger." && $("#collapsed-unread").hidden, "opening shows the reply and marks it read");
 await press("#next-bot-btn");
 await until(() => caption() === "Pool is at 84." && $("#collapsed-others").children.length === 0, "the other bot's reply shows and is marked read");
 await collapse();
 check(!visible($("#collapsed-unread")), "nothing left unread");
+check($("#collapsed-name").textContent === "Ben", "Ben is selected");
+await notify("a", { text: "Lease is signed." });
+await until(() => $("#collapsed-name").textContent === "Ann", "a reply from the bot that isn't selected is previewed too");
+await press("#collapsed-bar");
+await until(() => caption() === "Lease is signed." && $("#collapsed-name").textContent === "Ann", "opening a preview opens its bot");
+await collapse();
+check(!visible($("#collapsed-unread")), "a previewed reply that was opened is read");
+const preference = (body) => fetch("/api/settings/preferences", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${window.__MAUSBOT_NOTCH_AUTH_TOKEN}`, "Content-Type": "application/json" },
+  body: JSON.stringify(body)
+});
+await preference({ openOnReply: true });
+await sleep(300);
+await notify("a", { text: "Opens by itself." });
+await until(() => $("#notch-pouch").dataset.expanded === "true" && caption() === "Opens by itself.", "a reply opens the notch when Settings says so");
+check(window.__sent.findLast((m) => m.type === "hitRect").isPassive, "and doesn't take the keyboard");
+native({ action: "toggleExpand" });
+await until(() => visible($("#collapsed-unread")), "an untouched reply stays unread");
+await press("#collapsed-bar");
+await collapse();
+await preference({ openOnReply: false });
 ok("unread count, preview and marking read, per bot");
 
 // --- Double-command draft still works on top of all this ---

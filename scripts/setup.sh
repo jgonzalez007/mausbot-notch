@@ -45,7 +45,6 @@ if [ ! -f "$CONFIG_FILE" ]; then
   cp "$ROOT_DIR/config.example.json" "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
   echo "[setup] Created an empty bots config at: $CONFIG_FILE"
-  echo "[setup] Edit it to add your bot's id, Bot API key and server URL (see README)."
 else
   echo "[ok] Found existing bots config at: $CONFIG_FILE"
 fi
@@ -73,6 +72,4 @@ echo "  • Switch bots:     Left / Right Arrows (← / →)"
 echo "  • Tap to type:     Enter sends, Esc closes"
 echo "=================================================="
 echo ""
-echo "If the notch shows \"No bots configured\", edit:"
-echo "  $CONFIG_FILE"
-echo "and relaunch with: ./scripts/launch.sh"
+echo "Add your bots in Settings: click the notch's menu-bar icon (✦), then Settings…"

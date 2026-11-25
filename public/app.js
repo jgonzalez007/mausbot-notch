@@ -24,7 +24,9 @@ function postNativeMessage(payload) {
 // state.status: "idle" | "sending" | "working" | "needs_approval" | "error"
 const state = {
   expanded: false,
-  passive: false, // open because a bot replied: shown without taking the keyboard
+  passive: false, // opened by itself: shown without taking the keyboard
+  openOnReply: false, // Settings: open the notch for a reply instead of only previewing it
+  peekBotId: null, // the bot whose new reply the closed notch is previewing
   typing: false,
   bots: [],
   selectedBotId: null,
@@ -62,6 +64,10 @@ const dom = {
   rewriteChip: document.getElementById("rewrite-chip"),
   rewriteMenu: document.getElementById("rewrite-menu"),
   rewriteBack: document.getElementById("rewrite-back"),
+  rewriteMine: document.getElementById("rewrite-mine"),
+  rewriteEdit: document.getElementById("rewrite-edit"),
+  settingsChip: document.getElementById("settings-chip"),
+  collapsedMark: document.getElementById("collapsed-mark"),
   resultView: document.getElementById("result-view"),
   resultTitle: document.getElementById("result-title"),
   resultText: document.getElementById("result-text"),
@@ -96,6 +102,10 @@ const BOT_COLORS = {
 };
 const DEFAULT_BOT_COLOR = "#5b8dee";
 
+function botColor(bot) {
+  return BOT_COLORS[bot?.color] || DEFAULT_BOT_COLOR;
+}
+
 // ============================================================================
 // NATIVE HIT-RECT SYNC
 // ============================================================================
@@ -129,6 +139,7 @@ function setExpanded(expanded, { passive = false } = {}) {
   state.passive = next && passive;
   dom.pouch.dataset.expanded = String(next);
   if (next) {
+    endPeek();
     refreshBootstrap();
     showDeferredReply();
     showUnread();
@@ -183,24 +194,25 @@ function renderPouch() {
   renderResult();
   renderTranscript();
   renderStopArea();
-  renderUnread();
   if (!bot) {
-    dom.botNameLabel.textContent = "No bots configured";
+    dom.botNameLabel.textContent = "No bots yet. Add one in Settings.";
     dom.botNameLabel.hidden = false;
-    dom.collapsedName.textContent = "MausBot Notch";
+    renderUnread();
     dom.botStatusCaption.hidden = true;
     dom.pouch.dataset.status = "idle";
     document.documentElement.style.setProperty("--bot-ink", DEFAULT_BOT_COLOR);
+    renderRewriteMenu();
     reportHitRectToNative();
     return;
   }
 
-  document.documentElement.style.setProperty("--bot-ink", BOT_COLORS[bot.color] || DEFAULT_BOT_COLOR);
+  document.documentElement.style.setProperty("--bot-ink", botColor(bot));
   dom.pouch.dataset.status = state.status;
   // A double-⌘ draft needs room to be read, so the pouch grows while one is showing.
   dom.pouch.dataset.draft = state.copyText && state.expanded ? "true" : "false";
 
-  dom.collapsedName.textContent = bot.name;
+  renderUnread();
+  renderRewriteMenu();
   dom.botNameLabel.textContent = bot.name;
   // The identity bar at the top already shows the name; don't repeat it in the middle.
   dom.botNameLabel.hidden = true;
@@ -253,7 +265,7 @@ let activeReplyPoll = null;
 // INBOUND EVENTS: server-sent events from the local bridge.
 // The bridge polls pending bot threads in the background and (once the Bot API
 // grows a push channel) relays /api/notify events, so replies that land while
-// the notch is collapsed or closed still pop the notch and surface.
+// the notch is collapsed or closed show on it as a preview and a count.
 // ============================================================================
 let eventSource = null;
 
@@ -289,20 +301,18 @@ function handleServerEvent(evt) {
   const draftToRead = state.copyText && state.expanded;
   if (isCurrent && (state.result || state.drafting || draftToRead)) {
     if (evt.type === "reply") state.deferredReplyBotId = evt.botId;
-    if (evt.type === "reply" || evt.type === "hello") refreshBootstrap();
+    if (evt.type !== "status" && evt.type !== "timeout") refreshBootstrap();
     return;
   }
 
   if (evt.type === "reply") {
     if (isCurrent) {
       state.copyText = ""; // the caption becomes the reply, so a click must not copy an old draft
-      // Pop the notch and pull the latest transcript so the caption updates.
-      // It must not take the keyboard from whatever the user is typing in.
-      if (!state.expanded) setExpanded(true, { passive: true });
+      // Opening by itself must not take the keyboard from whatever the user is typing in.
+      if (state.openOnReply && !state.expanded) setExpanded(true, { passive: true });
       pollTranscriptOnce(evt.botId);
     }
-    // Replies for other bots are kept in state.json; they show when you
-    // cycle to that bot and the notch polls its transcript.
+    // The unread count goes up, which previews the reply on a closed notch (noteUnread).
     refreshBootstrap();
   } else if (evt.type === "status" && isCurrent) {
     state.status = evt.status;
@@ -314,7 +324,7 @@ function handleServerEvent(evt) {
       state.statusCaption = "";
       renderPouch();
     }
-  } else if (evt.type === "hello") {
+  } else if (evt.type === "hello" || evt.type === "settings") {
     refreshBootstrap();
   }
 }
@@ -423,8 +433,10 @@ async function pollTranscriptOnce(botId) {
     const last = res.entries[res.entries.length - 1];
     const bot = findBot(botId);
     if (bot) {
+      const before = bot.unreadCount || 0;
       bot.unreadCount = res.entries.filter((e) => e.unread).length;
-      bot.lastReplyPreview = res.entries.findLast((e) => e.role === "assistant")?.text.slice(0, 80) || "";
+      bot.lastReplyPreview = res.entries.findLast((e) => e.role === "assistant")?.text.replace(/\s+/g, " ").trim().slice(0, 80) || "";
+      noteUnread(bot, before);
       if (!res.pending && !res.sending) bot.waitingSinceMs = null;
     }
     if (last && last.role === "assistant" && !res.sending && !isBusyWithText()) {
@@ -470,10 +482,35 @@ function markShownAsRead(botId, last) {
     .catch(() => {});
 }
 
+// A new reply is previewed on the closed notch for a moment, whichever bot it came from. It stays
+// closed: the count, the preview or the bot's dot is there until the reply is opened.
+const PEEK_MS = 7000;
+let peekTimer = null;
+
+function noteUnread(bot, before) {
+  if (bot.unreadCount <= before || state.expanded) return;
+  clearTimeout(peekTimer);
+  state.peekBotId = bot.id;
+  peekTimer = setTimeout(endPeek, PEEK_MS);
+}
+
+function endPeek() {
+  clearTimeout(peekTimer);
+  if (!state.peekBotId) return;
+  state.peekBotId = null;
+  renderPouch();
+}
+
+// The closed notch shows the previewed bot for a moment, otherwise the selected one.
 function renderUnread() {
-  const bot = getSelectedBot();
+  const peeking = state.expanded ? null : findBot(state.peekBotId);
+  const bot = peeking || getSelectedBot();
   const count = bot?.unreadCount || 0;
   dom.pouch.dataset.unread = String(count > 0);
+  dom.pouch.dataset.peek = String(Boolean(peeking));
+  dom.collapsedName.textContent = bot?.name || "MausBot Notch";
+  dom.collapsedMark.style.background = peeking ? botColor(bot) : "";
+  dom.collapsedUnread.style.background = peeking ? botColor(bot) : "";
   dom.collapsedUnread.hidden = count === 0;
   dom.collapsedUnread.textContent = count > 99 ? "99+" : String(count);
   dom.collapsedPreview.hidden = count === 0;
@@ -483,7 +520,7 @@ function renderUnread() {
       .filter((b) => b !== bot && b.unreadCount)
       .map((b) => {
         const dot = document.createElement("span");
-        dot.style.background = BOT_COLORS[b.color] || DEFAULT_BOT_COLOR;
+        dot.style.background = botColor(b);
         dot.title = `${b.name}: ${b.unreadCount} unread`;
         return dot;
       })
@@ -652,8 +689,14 @@ dom.pouch.addEventListener("pointerdown", takeKeyboard, true);
 
 // Collapsed: click to expand. Expanded: click is disabled via pointer-events:none in CSS.
 dom.collapsedBar.addEventListener("click", () => {
-  if (!state.expanded) setExpanded(true);
+  if (!state.expanded) openByUser();
 });
+
+// Opening while a reply is previewed opens the bot it came from.
+function openByUser() {
+  if (state.peekBotId && state.peekBotId !== state.selectedBotId) selectBot(state.peekBotId);
+  setExpanded(true);
+}
 
 // Double-tap the identity bar or title block while expanded collapses the notch.
 function collapseOnDoubleTap() {
@@ -848,7 +891,36 @@ let taskSeq = 0;
 function showRewriteMenu(show) {
   dom.rewriteMenu.hidden = !show;
   dom.actionChips.hidden = show;
+  dom.pouch.dataset.rewrite = String(show);
 }
+
+// The user's own presets for this bot, after the four built-in ones.
+function renderRewriteMenu() {
+  const presets = getSelectedBot()?.presets || [];
+  const key = JSON.stringify(presets);
+  dom.pouch.dataset.presets = String(presets.length > 0);
+  if (dom.rewriteMine.dataset.shown === key) return;
+  dom.rewriteMine.dataset.shown = key;
+  dom.rewriteMine.replaceChildren(
+    ...presets.map((preset) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.dataset.prompt = preset.id;
+      chip.textContent = preset.name;
+      chip.addEventListener("click", () => startScreenTask("rewrite", preset.id));
+      return chip;
+    })
+  );
+}
+
+function openSettings(tab) {
+  setExpanded(false);
+  postNativeMessage({ type: "openSettings", tab });
+}
+
+dom.settingsChip.addEventListener("click", () => openSettings("bots"));
+dom.rewriteEdit.addEventListener("click", () => openSettings("presets"));
 
 function startScreenTask(task, promptId) {
   cancelDraft();
@@ -862,7 +934,7 @@ function startScreenTask(task, promptId) {
     seq: ++taskSeq,
     task,
     promptId: promptId || "",
-    title: promptId ? PROMPT_NAMES[promptId] || TASK_TITLES[task] : TASK_TITLES[task],
+    title: PROMPT_NAMES[promptId] || getSelectedBot()?.presets?.find((p) => p.id === promptId)?.name || TASK_TITLES[task],
     text: TASK_WORKING[task],
     notes: "",
     phase: "working",
@@ -1045,7 +1117,8 @@ window.__notchCommand = async (cmd) => {
     case "toggleExpand":
       // ⌥Space on a notch that opened by itself means "let me use it", not "close it".
       if (state.expanded && state.passive && cmd.byUser) takeKeyboard();
-      else setExpanded(!state.expanded);
+      else if (state.expanded) setExpanded(false);
+      else openByUser();
       break;
     case "screenAnswerReading":
       // Double-tap ⌘ (bare, no other key): the native side is reading the email, Slack
@@ -1121,6 +1194,9 @@ window.__notchCommand = async (cmd) => {
         renderPouch();
       }
       break;
+    case "collapse":
+      setExpanded(false);
+      break;
     case "nextBot":
       cycleBot(1);
       break;
@@ -1162,13 +1238,18 @@ async function refreshBootstrap() {
     const data = await apiFetch("/api/bootstrap").then((r) => r.json());
     if (!data.ok || !Array.isArray(data.bots)) return;
 
-    const oldIds = state.bots.map((b) => b.id).join(",");
-    const newIds = data.bots.map((b) => b.id).join(",");
-    const rosterChanged = oldIds !== newIds;
+    const before = new Map(state.bots.map((b) => [b.id, b.unreadCount || 0]));
+    const signature = (bots) => JSON.stringify(bots.map((b) => [b.id, b.name, b.color, b.presets]));
+    const rosterChanged = signature(state.bots) !== signature(data.bots);
 
     state.bots = data.bots;
-    if (!state.selectedBotId || !state.bots.some((b) => b.id === state.selectedBotId)) {
-      state.selectedBotId = data.selectedBotId || state.bots[0]?.id || null;
+    state.openOnReply = data.openOnReply;
+    for (const bot of state.bots) if (before.has(bot.id)) noteUnread(bot, before.get(bot.id));
+    if (!findBot(state.selectedBotId)) {
+      state.selectedBotId = data.selectedBotId;
+      state.status = "idle";
+      state.statusCaption = "";
+      stopReplyPoll();
     }
 
     if (rosterChanged) {

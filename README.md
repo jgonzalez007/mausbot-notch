@@ -13,7 +13,7 @@ OpenMausBot's [Bot API](https://github.com/milind-soni/OpenMausBot/blob/main/doc
 **Running [OpenMausBot](https://github.com/milind-soni/OpenMausBot)?** This is
 your notch: one `Option+Space` and your bots live in the notch — cycle them
 with `←` / `→`, tap to type, and replies that land while the notch is closed
-pop it open. Zero npm dependencies; the only runtime is Node.js built-ins.
+show on it as a preview and a count. Zero npm dependencies; the only runtime is Node.js built-ins.
 
 ---
 
@@ -39,9 +39,8 @@ To also install `MausBot Notch.app` into `/Applications`:
 ./scripts/setup.sh --install
 ```
 
-`./scripts/setup.sh` creates an empty bots config the first time it runs (see
-**Configuring bots** below) and then builds and launches the app. Relaunch
-with `./scripts/launch.sh` after editing the config.
+`./scripts/setup.sh` creates an empty config the first time it runs and then
+builds and launches the app. Add your bots in **Settings** (below).
 
 > **Requirements:** macOS 13+, Node.js 18+, Xcode Command Line Tools (`swiftc`).
 > No npm or other package manager needed — `server.mjs` uses only Node built-ins.
@@ -71,9 +70,21 @@ Two kinds of key:
 Start with a normal key. Only mark a key "Acts as me" once you understand
 that trade-off.
 
-## 2. Configure the bots MausBot Notch can reach
+## 2. Add the bot in Settings
 
-MausBot Notch reads its bot list from:
+Open **Settings** from the menu-bar icon, or with the ⚙ in the open notch:
+
+- **Bots** — add, change or remove a bot. Paste the whole command from the Bot
+  API card to fill in the address, id and key. **Test key** checks it without
+  messaging the bot. A saved key is never shown again, and is only reused for
+  the address it was saved with.
+- **Model** — pick the local model server and model, and test them.
+- **Presets** — your own choices under **Rewrite ▾**, for one bot or all of them.
+- **General** — the shortcut that opens the notch, double-⌘ on or off, and
+  whether a reply opens the notch or only shows a preview.
+
+Changes apply right away. Settings writes this file, which you can also edit by
+hand (relaunch afterwards for `hotkey` and `doubleCommand`):
 
 ```
 ~/Library/Application Support/MausBot Notch/config.json
@@ -91,17 +102,29 @@ MausBot Notch reads its bot list from:
       "baseUrl": "https://your-instance.example.com",
       "color": "cyan"
     }
-  ]
+  ],
+  "reply": { "ollamaUrl": "http://127.0.0.1:11434", "model": "" },
+  "presets": [
+    { "id": "tenant", "name": "Tenant reply", "instruction": "Rewrite as a short, friendly message to a tenant.", "botId": null }
+  ],
+  "hotkey": "Option+Space",
+  "doubleCommand": true,
+  "openOnReply": false
 }
 ```
 
+- `presets` (optional): `botId` null shows the preset for every bot.
+- `hotkey` (optional): `Control`, `Option`, `Shift` and `Command` in that order,
+  then a letter, digit, punctuation key, `Space` or `F1`–`F20`. It needs `Control` or `Option`
+  unless it is a function key.
+- `openOnReply` (optional, default off): open the notch when the selected bot replies.
 - `notifyToken` (optional): a stable 32+ character string that survives
   relaunches. Lets a same-host OpenMausBot instance (or a hook script) push
   events to `POST http://127.0.0.1:4799/api/notify`. Empty = disabled. It only
   unlocks `/api/notify` — never the bootstrap or message routes.
 - `pollIntervalSec` (optional, 10–300, default 20): how often the bridge
   re-checks each pending bot thread, so a reply that lands while the notch is
-  closed still pops it open. Respects the Bot API's 10 calls/min rate limit.
+  closed still shows up. Respects the Bot API's 10 calls/min rate limit.
 - `baseUrl` is wherever this server's webhooks are reachable — a Cloud's
   public address, or your self-hosted domain. The Bot API lives under that
   same host's `/hooks/api/bots/<id>/messages` path.
@@ -118,20 +141,18 @@ MausBot Notch reads its bot list from:
 - The file is created mode `0600`, readable only by your account, because it
   holds Bot API keys.
 
-Relaunch with `./scripts/launch.sh` after editing it.
-
 ---
 
 ## ⌨️ Keyboard Shortcuts & Controls
 
 | Action | Shortcut / Gesture |
 | :--- | :--- |
-| **Expand / Collapse Notch** | **`⌥Space`** *(Option + Space)* or click the collapsed notch |
+| **Expand / Collapse Notch** | **`⌥Space`** *(Option + Space, changeable in Settings)* or click the collapsed notch |
 | **Previous / Next bot** | **`←` / `→`** *(when expanded)* or click **`<` / `>`** |
 | **Type a message** | Tap the center dots *(or start typing any letter when expanded)* → **`Enter`** to send |
 | **Cancel typing / Close** | **`Esc`** or click outside the notch pouch |
 
-The menu-bar icon (✦ / ⏳) also lets you pick a bot, quit, and toggle
+The menu-bar icon (✦ / ⏳) also lets you pick a bot, open Settings, quit, and toggle
 **Launch at Login** (an `SMAppService` login item, so the notch comes back on
 boot). Registration works best with the app in a stable location — install to
 `/Applications` (release or `setup.sh --install`) rather than a throwaway
@@ -147,7 +168,7 @@ Double-tap ⌘ and the notch writes your reply to what's in front of you:
    (anywhere else) the **app's window from a screenshot**, read on this Mac with Vision.
 2. A **local model** drafts the reply as you, with no tools. The email's text is treated as
    data, so instructions hidden in it can't make anything happen. Choose the model in
-   `config.json`, either from Ollama:
+   **Settings → Model**, which takes servers on this Mac only, or in `config.json`, either from Ollama:
    `"reply": { "ollamaUrl": "http://127.0.0.1:11434", "model": "qwen3:30b" }`
    or from any OpenAI-compatible local server (MTPLX, LM Studio, llama.cpp):
    `"reply": { "openaiUrl": "http://127.0.0.1:8001/v1", "model": "the-model" }`.
@@ -168,14 +189,15 @@ Click the notch to open it (540 wide, Kai's size). Three buttons sit under the b
 
 - **Summarize** reads the app in front and gives a short summary, key points and what needs you. Follow-ups: Shorter, Action items, Draft a reply.
 - **Proofread** fixes the text field you were typing in (or your selection), and falls back to the screen when there is none. The card shows the corrected text and a list of changes. Follow-ups: More formal, Friendlier, Shorter.
-- **Rewrite ▾** offers Make it concise, Explain simply, Turn into bullets and Translate to Spanish for the text you selected or are editing.
+- **Rewrite ▾** offers Make it concise, Explain simply, Turn into bullets and Translate to Spanish for the text you selected or are editing, then your own presets. **Edit…** opens them in Settings.
 
-Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the same local model, so nothing leaves this Mac.
+Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the same local model, so with a model on this Mac nothing leaves it.
 
 ## 💬 Transcript, unread replies, Stop waiting
 
 - **Transcript** (next to the three buttons) shows the kept conversation with this bot: scroll, times, Copy on each message and Copy all. Esc or × closes it.
-- **Unread replies**: the collapsed notch shows the latest unread reply and a count for the current bot, plus a dot when another bot has one. Opening the reply marks it read.
+- **New replies** leave the notch closed. It shows the bot's name and the start of the reply for 7 seconds, whichever bot it came from; a click or the shortcut opens that bot. Settings can make the selected bot's reply open the notch instead, without taking the keyboard.
+- **Unread replies**: the collapsed notch then shows the latest unread reply and a count for the current bot, plus a dot when another bot has one. Opening the reply marks it read.
 - **Stop waiting** appears with the elapsed time while a reply is on its way. It ends the notch's wait only: the Bot API has no way to cancel a run, so the bot may still finish in OpenMausBot.
 
 ## 🔐 macOS permissions (double-⌘)
@@ -200,15 +222,19 @@ without rebuilding (`./scripts/launch.sh`) keeps the permissions. An "Apple Deve
 ```text
 mausbot-notch/
 ├── macos/
-│   ├── NotchApp.swift        # Native NSPanel + WKWebView hit-testing + Carbon global ⌥Space hotkey
+│   ├── NotchApp.swift        # Native NSPanel + WKWebView hit-testing + Carbon global hotkey
+│   ├── SettingsWindow.swift  # Settings window; keeps web views on the bridge's own pages
+│   ├── HotKey.swift          # Which shortcuts are accepted
 │   ├── DraftSpot.swift       # Rules for "is this still the conversation the draft is for?"
 │   ├── Info.plist            # LSUIElement bundle metadata
 │   └── entitlements.plist    # Network client/server entitlements
 ├── public/
 │   ├── index.html            # Collapsed chin bar + expanded notch pouch
 │   ├── styles.css            # Black hardware-notch geometry and spring transitions
-│   └── app.js                # Notch state machine, bot cycling, tap-to-type chat
+│   ├── app.js                # Notch state machine, bot cycling, tap-to-type chat
+│   └── settings.{html,css,js} # The Settings window's page
 ├── server.mjs                # Local Node.js bridge to the OpenMausBot Bot API (+ SSE, /api/notify, background poller)
+├── settings.mjs              # Reading and changing config.json for the Settings window
 ├── config.example.json       # Template copied to the real bots config on first setup
 ├── install.sh                # Release installer: download DMG → /Applications → launch
 ├── .github/workflows/        # ci.yml (build + tests), release.yml (tag → universal DMG release)
@@ -217,8 +243,9 @@ mausbot-notch/
     ├── build-mac-app.sh        # Compiles the Swift binary & signs MausBot Notch.app
     ├── make-release.sh         # Universal (arm64 + x86_64) build + DMG + sha256
     ├── smoke-test.sh           # Boots the bridge in a throwaway HOME; asserts auth, Host/Origin, SSE
-    ├── bridge-test.mjs         # Bridge against a fake Bot API: replies, stop, unread
-    ├── ui-test.mjs             # Opens the notch screen and presses every button (ui-host.swift, ui-test-page.js)
+    ├── bridge-test.mjs         # Bridge against a fake Bot API: replies, stop, unread, settings
+    ├── ui-test.mjs             # Opens the notch and Settings and presses every button
+    ├── swift-test.sh           # Draft destination and shortcut rules
     └── launch.sh               # Starts the local bridge server & opens MausBot Notch.app
 ```
 
@@ -248,18 +275,18 @@ The Bot API is outbound-only, so "inbound" is built in three layers:
    polling the thread every `pollIntervalSec` seconds — even when the notch
    is closed or the app was relaunched. When a reply lands, it is stored in
    `state.json` and pushed to the open UI over server-sent events
-   (`GET /api/events`), which pops the notch and refreshes the caption.
+   (`GET /api/events`), which previews it on the closed notch.
    The open notch and this poller share one limiter (8 s apart while open, 60 s in the
    background, at most 8 of the Bot API's 10 calls a minute). A `429` or server error waits
    (`Retry-After`, or 60 s) and tries again, so the reply isn't lost. It gives up on a thread
-   after 30 minutes. A reply opens the notch without taking the keyboard.
+   after 30 minutes.
 2. **`POST /api/notify`.** A loopback endpoint for same-host pushes. Point a
    same-host OpenMausBot instance (or a hook script) at
    `http://127.0.0.1:4799/api/notify` with the stable `notifyToken` from
    `config.json` and body `{"botId": "…", "text": "…"}` or
    `{"botId": "…", "status": "working|needs_approval"}`. This is the forward
-   hook: the day the Bot API gains a push channel, wire it here and the notch
-   pops with zero app changes.
+   hook: the day the Bot API gains a push channel, wire it here and replies
+   show up with zero app changes.
 3. **UI event stream.** The notch subscribes to `/api/events` on load
    (`EventSource`; the launch token travels as a query parameter, since
    `EventSource` cannot send headers) and handles `reply`, `status` and
@@ -285,14 +312,20 @@ is stored at:
 `~/Library/Application Support/MausBot Notch/launch-auth-token` (mode `0600`)
 
 All `/api/*` routes require `Authorization: Bearer <token>` (or
-`X-MausBot-Notch-Token`). The notch web UI receives the token via injected
-HTML / a Swift `WKUserScript`; `public/app.js` sends it on every API call.
+`X-MausBot-Notch-Token`). The app gives its pages the token through a Swift
+`WKUserScript`. It is never in the files the bridge serves, which any program on
+this Mac can load, so opening the notch's address in a browser shows an empty
+page. A strict Content-Security-Policy lets the pages load and contact nothing
+but the bridge, and the app's windows can't be navigated away from it.
 Query-parameter tokens are only accepted on `/api/events` and `/api/notify`.
 The optional stable `notifyToken` from `config.json` only unlocks
 `/api/notify`, never the bootstrap or message routes.
 
 Bot API keys live only in `config.json` (mode `0600`) and are never logged or
-echoed back to the web UI.
+echoed back to the web UI: Settings only learns whether a bot has one. A saved
+key is not reused when the bot's address changes, a bot's address must be
+`https` unless it is on this Mac or a private network, and a `config.json` with
+a mistake in it is never overwritten.
 
 Manual health check:
 

@@ -85,5 +85,4 @@ else
   echo "[ok] Installed /Applications/$APP_NAME.app (use --no-open to launch yourself)."
 fi
 
-echo "If the notch shows \"No bots configured\", edit:"
-echo "  ~/Library/Application Support/MausBot Notch/config.json"
+echo "Add your bots in Settings: click the notch's menu-bar icon (✦), then Settings…"
