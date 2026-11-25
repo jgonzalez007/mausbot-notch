@@ -5,7 +5,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="${PORT:-4799}"
+# The app's own bridge listens on 4799 when it is running, so pick a free port unless told.
+if [ -z "${PORT:-}" ]; then
+  PORT="$(for p in 4791 4792 4793 4794 4795; do lsof -nP -iTCP:"$p" -sTCP:LISTEN > /dev/null 2>&1 || { echo "$p"; break; }; done)"
+fi
+PORT="${PORT:-4791}"
 BASE="http://127.0.0.1:$PORT"
 TEST_HOME="$(mktemp -d)"
 SERVER_PID=""
