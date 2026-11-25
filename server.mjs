@@ -1118,6 +1118,7 @@ const server = http.createServer(async (req, res) => {
         pending: freshEntry.pending,
         pendingSinceMs: freshEntry.pendingSinceMs || null,
         messages,
+        entries: messages,
         unreadCount,
         unreadSinceMs
       }, cors);
