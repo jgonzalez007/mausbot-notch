@@ -6,6 +6,22 @@ check(sentSince(0, "rosterLoaded"), "the bots reach the menu bar");
 check(getComputedStyle(document.documentElement).getPropertyValue("--bot-ink").trim() === "#f472b6", "the bot's color is used");
 ok("starts up");
 
+// --- Notch size and position: the closed pill fills the menu bar and hides nothing underneath ---
+const rootStyle = getComputedStyle(document.documentElement);
+const notchW = parseFloat(rootStyle.getPropertyValue("--notch-width"));
+const notchH = parseFloat(rootStyle.getPropertyValue("--notch-height"));
+const pouch = $("#notch-pouch").getBoundingClientRect();
+check(Math.abs(pouch.height - notchH) < 0.5, `the closed notch is as tall as the hardware notch (${pouch.height} vs ${notchH})`);
+check(Math.abs(pouch.top) < 0.5, "the closed notch sits flush with the top of the screen");
+check(Math.abs(pouch.left + pouch.width / 2 - window.innerWidth / 2) < 0.5, "the closed notch is centred on the screen");
+const wing = parseFloat(getComputedStyle($("#notch-pouch")).getPropertyValue("--wing-width"));
+check(Math.abs(pouch.width - (notchW + wing * 2)) < 1, "the closed notch is the hardware notch plus one wing either side");
+const notchLeft = pouch.left + (pouch.width - notchW) / 2;
+const notchRight = notchLeft + notchW;
+check($("#collapsed-name").getBoundingClientRect().right <= notchLeft + 0.5, "the bot's name stays left of the camera notch");
+check($("#collapsed-clock").getBoundingClientRect().left >= notchRight - 0.5, "the clock stays right of the camera notch");
+ok("the closed notch lines up with the hardware notch and nothing hangs below it");
+
 await press("#collapsed-bar");
 for (const sel of ["[data-task=summarize]", "[data-task=proofread]", "#rewrite-chip", "#transcript-chip"]) check(visible($(sel)), `${sel} shows when the notch opens`);
 await shot("1-open");

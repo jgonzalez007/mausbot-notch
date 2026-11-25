@@ -479,17 +479,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return NSScreen.screens.first ?? NSScreen.main
     }
 
-    private func detectHardwareNotchGeometry(for screen: NSScreen) -> (width: CGFloat, height: CGFloat) {
+    /// The notch's rect in screen coordinates (origin bottom left). The panel is centred on this,
+    /// not on the screen, so a notch that is not perfectly centred still lines up.
+    private func notchRect(for screen: NSScreen) -> NSRect {
         if #available(macOS 12.0, *) {
             if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-                let gap = screen.frame.width - left.width - right.width
-                let h = max(32, screen.safeAreaInsets.top)
-                if gap > 100 && gap < 320 {
-                    return (gap, h)
+                let width = screen.frame.width - left.width - right.width
+                if width > 100 && width < 320 {
+                    let height = max(1, screen.safeAreaInsets.top)
+                    return NSRect(
+                        x: screen.frame.minX + left.width,
+                        y: screen.frame.maxY - height,
+                        width: width,
+                        height: height
+                    )
                 }
             }
         }
-        return (185, 32)
+        // No hardware notch: a pill in the middle of the menu bar.
+        let menuBarHeight = max(20, screen.frame.maxY - screen.visibleFrame.maxY)
+        return NSRect(
+            x: screen.frame.midX - 92.5,
+            y: screen.frame.maxY - menuBarHeight,
+            width: 185,
+            height: menuBarHeight
+        )
+    }
+
+    private func notchCenterX(for screen: NSScreen) -> CGFloat {
+        notchRect(for: screen).midX
+    }
+
+    private func sendNotchGeometryToWeb() {
+        guard let screen = primaryMacScreen() else { return }
+        let notch = notchRect(for: screen)
+        sendCommandToWeb([
+            "action": "setNotchGeometry",
+            "notchWidth": Int(notch.width.rounded()),
+            "notchHeight": Int(notch.height.rounded())
+        ])
     }
 
     private func setupNotchPanel() {
@@ -497,7 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         // Panel sits directly under the notch: top edge at frame.maxY (top of screen),
         // extending down. Notch (safeAreaInsets.top) sits on top of the panel area.
         let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
+            x: notchCenterX(for: screen) - panelWidth / 2,
             y: screen.frame.maxY - panelHeight,
             width: panelWidth,
             height: panelHeight
@@ -536,20 +564,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             webView.load(URLRequest(url: url))
         }
 
-        let notchGeo = detectHardwareNotchGeometry(for: screen)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            self?.sendCommandToWeb([
-                "action": "setNotchGeometry",
-                "notchWidth": Int(notchGeo.width),
-                "notchHeight": Int(notchGeo.height)
-            ])
+            self?.sendNotchGeometryToWeb()
         }
     }
 
     @objc private func repositionNotchPanel() {
         guard let screen = primaryMacScreen(), let panel = panel else { return }
         let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
+            x: notchCenterX(for: screen) - panelWidth / 2,
             y: screen.frame.maxY - panelHeight,
             width: panelWidth,
             height: panelHeight
@@ -979,6 +1002,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             updateStatusItemAppearance()
             rebuildStatusMenu()
+
+        case "requestNotchGeometry":
+            sendNotchGeometryToWeb()
 
         case "rosterLoaded":
             if let bots = body["bots"] as? [[String: String]] {

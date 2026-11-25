@@ -76,7 +76,8 @@ const dom = {
   resultClose: document.getElementById("result-close"),
   resultReplace: document.getElementById("result-replace"),
   refineChips: document.getElementById("refine-chips"),
-  resultFooter: document.getElementById("result-footer")
+  resultFooter: document.getElementById("result-footer"),
+  collapsedClock: document.getElementById("collapsed-clock")
 };
 
 function findBot(botId) {
@@ -611,6 +612,12 @@ function formatTime(ms) {
   return date.toDateString() === new Date().toDateString()
     ? time
     : `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+// Collapsed pill clock: shows current time, updates once per minute.
+function renderClock() {
+  const now = new Date();
+  dom.collapsedClock.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function transcriptSpeaker(entry) {
@@ -1270,6 +1277,11 @@ async function init() {
   await refreshBootstrap();
   renderPouch();
   reportHitRectToNative();
+  renderClock();
+  setInterval(renderClock, 30000);
+  // The native side owns the real notch size; ask again on every page load so a
+  // reload never falls back to the defaults above.
+  postNativeMessage({ type: "requestNotchGeometry" });
   connectEvents();
   setInterval(refreshBootstrap, 8000);
 }
