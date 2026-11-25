@@ -50,6 +50,13 @@ private func carbonHotKeyHandler(
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    // By default macOS keeps every window inside the visible frame, i.e. below the
+    // menu bar and the hardware notch. That pushed the notch ~33 pt down so it hung
+    // under the Mac's own notch. This panel is meant to sit flush with the top edge.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        return frameRect
+    }
 }
 
 // MARK: - Transparent WebView with First-Click Acceptance
@@ -80,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     // Kai OS's notch canvas: its biggest shape (560×480, KaiNotchLayout.expandedSize) plus slack.
     private let panelWidth: CGFloat = 700
     private let panelHeight: CGFloat = 570
+    // Collapsed pill: 24 px padding on each side, height for mark + name + breathing room.
     private var hitRectInPanel = NSRect(x: 94, y: 0, width: 212, height: 56)
     private var isNotchOpen = false
     /// Open and meant to have the keyboard. False while a bot's reply is only being shown.
@@ -486,6 +494,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     private func setupNotchPanel() {
         guard let screen = primaryMacScreen() else { return }
+        // Panel sits directly under the notch: top edge at frame.maxY (top of screen),
+        // extending down. Notch (safeAreaInsets.top) sits on top of the panel area.
         let frame = NSRect(
             x: screen.frame.midX - panelWidth / 2,
             y: screen.frame.maxY - panelHeight,
