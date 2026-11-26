@@ -49,6 +49,7 @@
             <button class="chip" type="button" data-task="summarize" title="Summarize what is showing on your screen">Summarize</button>
             <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
             <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
+            <button id="calendar-chip" class="chip" type="button" title="Show your calendar for the day">Calendar</button>
             <button id="transcript-chip" class="chip chip-quiet" type="button" title="Show the conversation with this bot">Transcript</button>
             <button id="settings-chip" class="chip chip-quiet" type="button" aria-label="Settings" title="Settings">⚙</button>
           </div>
@@ -90,6 +91,23 @@
               <button id="transcript-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
             </div>
             <div id="transcript-list" class="transcript-list"></div>
+          </div>
+
+          <!-- One day of the Mac's calendars -->
+          <div id="calendar-view" class="transcript-view" hidden>
+            <div class="result-header">
+              <button id="event-back" class="result-btn" type="button" title="Back to the day (Esc)" hidden>‹ Back</button>
+              <button id="calendar-prev" class="result-btn" type="button" aria-label="Previous day" title="Previous day (←)">‹</button>
+              <span id="calendar-date" class="result-title"></span>
+              <button id="calendar-next" class="result-btn" type="button" aria-label="Next day" title="Next day (→)">›</button>
+              <span class="result-spacer"></span>
+              <button id="calendar-today" class="result-btn" type="button" title="Back to today">Today</button>
+              <button id="calendar-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
+            </div>
+            <div id="calendar-list" class="transcript-list"></div>
+            <div id="event-detail" class="event-detail" hidden></div>
+            <button id="event-open-link" class="chip chip-primary event-open-link" type="button" hidden></button>
+            <button id="calendar-privacy" class="chip calendar-privacy" type="button" hidden>Open System Settings</button>
           </div>
 
           <!-- Bottom row: < (prev bot) | tap-to-type | > (next bot) -->

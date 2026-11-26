@@ -1031,6 +1031,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 replaceFocusedText(text)
             }
 
+        case "calendarDay":
+            if let date = body["date"] as? String {
+                Task { @MainActor [weak self] in
+                    var answer = await CalendarEvents.answer(for: date)
+                    answer["action"] = "calendarDay"
+                    self?.sendCommandToWeb(answer)
+                }
+            }
+
+        case "openEventLink":
+            if let id = body["id"] as? String {
+                let opened = CalendarEvents.link(for: id).map { NSWorkspace.shared.open($0) } ?? false
+                sendCommandToWeb(opened ? ["action": "collapse"] : ["action": "eventLinkFailed", "id": id])
+            }
+
+        case "openCalendarPrivacy":
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                NSWorkspace.shared.open(url)
+            }
+
         case "openSettings":
             settingsWindow.show(tab: body["tab"] as? String, tokenScript: launchTokenScript())
 

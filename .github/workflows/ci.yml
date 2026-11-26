@@ -16,7 +16,7 @@ jobs:
           node-version: 20
 
       - name: Syntax-check local bridge
-        run: for f in server.mjs settings.mjs public/app.js public/settings.js; do node --check "$f"; done
+        run: for f in server.mjs settings.mjs public/app.js public/settings.js; do node --input-type=module --check < "$f"; done
 
       - name: Build app (native arch)
         run: bash scripts/build-mac-app.sh

@@ -23,9 +23,9 @@ check($("#collapsed-clock").getBoundingClientRect().left >= notchRight - 0.5, "t
 ok("the closed notch lines up with the hardware notch and nothing hangs below it");
 
 await press("#collapsed-bar");
-for (const sel of ["[data-task=summarize]", "[data-task=proofread]", "#rewrite-chip", "#transcript-chip"]) check(visible($(sel)), `${sel} shows when the notch opens`);
+for (const sel of ["[data-task=summarize]", "[data-task=proofread]", "#rewrite-chip", "#calendar-chip", "#transcript-chip"]) check(visible($(sel)), `${sel} shows when the notch opens`);
 await shot("1-open");
-ok("opening the notch shows Summarize, Proofread, Rewrite and Transcript");
+ok("opening the notch shows Summarize, Proofread, Rewrite, Calendar and Transcript");
 
 // --- Text tasks ---
 const runTask = async (task, canReplace) => {
@@ -150,6 +150,91 @@ await press("#transcript-chip");
 key("Escape");
 check(visible($("#transcript-chip")), "Esc closes the transcript but not the notch");
 ok("transcript, copying, scrolling and closing");
+
+// --- Calendar ---
+const localDay = (delta) => { const d = new Date(); d.setDate(d.getDate() + delta); return d.toLocaleDateString("en-CA"); };
+const asked = () => window.__sent.findLast((m) => m.type === "calendarDay")?.date;
+const at = (h, m = 0) => new Date().setHours(h, m, 0, 0);
+check(!visible($("#calendar-view")), "the calendar is closed to begin with");
+await press("#calendar-chip");
+await until(() => asked() === localDay(0), "the calendar asks for today, in local time");
+check(visible($("#calendar-view")) && !visible($("[data-task=proofread]")) && !visible($("#tap-to-type-btn")), "the calendar takes the whole notch");
+check($("#calendar-date").textContent.startsWith("Today") && !visible($("#calendar-today")), "it is on today");
+const details = { wholeDays: false, fromMs: at(9), toMs: at(10, 30), repeats: "", location: "", notes: "", organizer: "", people: [], link: null };
+native({ action: "calendarDay", date: localDay(0), status: "ok", events: [
+  { ...details, id: "holiday", wholeDays: true, fromMs: at(0), toMs: at(23, 59), title: "Holiday", calendar: "US Holidays", color: "#ff0000", allDay: true, startMs: at(0), endMs: null },
+  { ...details, id: "overnight", fromMs: at(9) - 864e5, link: { join: false, label: "example.com" }, title: "Overnight", calendar: "Work", color: "#00ff00", allDay: false, startMs: null, endMs: at(6) },
+  { ...details, id: "call", repeats: "Every week", location: "Room 4", organizer: "Ann", link: { join: true, label: "Zoom" },
+    people: [{ name: "Jose", reply: "Going", me: true }, { name: "Ben", reply: "", me: false }],
+    notes: "Agenda:<br>Leases &amp; pool<script>__errors.push('script')</script><img src=x onerror=__errors.push('notes')>", title: "<img src=x onerror=__errors.push('injected')>", calendar: "Work", color: "#00ff00", allDay: false, startMs: at(9), endMs: at(10, 30) }
+] });
+await until(() => document.querySelectorAll(".calendar-event").length === 3, "the day's events are listed");
+check([...document.querySelectorAll(".calendar-event")].every(visible), "every event can be seen");
+const times = [...document.querySelectorAll(".calendar-event-time")].map((t) => t.textContent);
+check(times[0] === "All day" && /^Until 6:00/.test(times[1]) && /^9:00.* – 10:30/.test(times[2]), `event times (${times})`);
+check(!$("#calendar-list img"), "event text is never treated as HTML");
+await shot("5b-calendar");
+check(document.querySelectorAll(".calendar-event-join").length === 1, "only the event with a meeting offers Join");
+n = window.__sent.length;
+await press(".calendar-event-join");
+check(sentSince(n, "openEventLink")?.id === "call", "Join on a row opens that event's meeting");
+check($("#event-detail").hidden, "Join doesn't open the details");
+const row = (i) => document.querySelectorAll(".calendar-event-open")[i];
+await press(row(2), "the call");
+check(visible($("#event-detail")) && !visible($("#calendar-list")) && !visible($("#calendar-prev")), "clicking an event shows its details");
+const shownText = $("#event-detail").textContent;
+for (const text of ["Every week", "Room 4", "Ann", "Jose (you) · Going\nBen", "Agenda:\nLeases & pool", "10:30"]) check(shownText.includes(text), `details show ${text} (${shownText})`);
+check(!$("#event-detail img") && !shownText.includes("script"), "invitation HTML is shown as text only");
+await shot("5d-event");
+n = window.__sent.length;
+check($("#event-open-link").textContent === "Join on Zoom", "the meeting service is named");
+await press("#event-open-link");
+check(sentSince(n, "openEventLink")?.id === "call" && !("url" in sentSince(n, "openEventLink")), "the page names the event, never an address");
+native({ action: "eventLinkFailed", id: "call" });
+check($("#event-detail").textContent.startsWith("Couldn't open the link"), "a link that won't open says so");
+native({ action: "nextBot" });
+check(visible($("#event-detail")), "→ does nothing in an event");
+await press("#event-back");
+check(visible($("#calendar-list")) && visible($("#calendar-prev")) && $("#calendar-date").textContent.startsWith("Today"), "Back returns to the day");
+await press(row(1), "the overnight event");
+check($("#event-open-link").textContent === "Open example.com" && !$("#event-detail").textContent.includes("Couldn't"), "another link shows where it goes");
+key("Escape");
+check(visible($("#calendar-list")), "Esc returns to the day");
+await press(row(0), "the holiday");
+check(!visible($("#event-open-link")) && $("#event-detail").textContent.includes("All day"), "an event without a link has no button");
+native({ action: "prevBot" });
+check(visible($("#calendar-list")) && asked() === localDay(0), "← returns to the same day");
+native({ action: "collapse" });
+check($("#notch-pouch").dataset.expanded === "false", "opening a link closes the notch");
+await press("#collapsed-bar");
+if (!visible($("#calendar-view"))) await press("#calendar-chip");
+ok("events: details, Join, links, Back, Esc and ←");
+await press("#calendar-next");
+await until(() => asked() === localDay(1) && $("#calendar-date").textContent.startsWith("Tomorrow"), "› shows tomorrow");
+native({ action: "calendarDay", date: localDay(0), status: "ok", events: [{ title: "Late", calendar: "", color: "#000", allDay: true }] });
+check(!$(".calendar-event"), "a late answer for another day is dropped");
+native({ action: "calendarDay", date: localDay(1), status: "ok", events: [] });
+await until(() => $("#calendar-list").textContent === "Nothing on this day.", "an empty day says so");
+await press("#calendar-prev");
+native({ action: "prevBot" });
+await until(() => asked() === localDay(-1) && $("#calendar-date").textContent.startsWith("Yesterday"), "‹ and ← go back a day");
+check($("#collapsed-name").textContent === "Ann", "← doesn't change the bot behind the calendar");
+key("x");
+check($("#type-form").hidden, "typing does nothing in the calendar");
+await press("#calendar-today");
+await until(() => asked() === localDay(0), "Today goes back to today");
+native({ action: "calendarDay", date: localDay(0), status: "denied" });
+await press("#calendar-privacy");
+check(sentSince(0, "openCalendarPrivacy"), "without permission it offers System Settings");
+await shot("5c-calendar-denied");
+native({ action: "calendarDay", date: localDay(0), status: "error", error: "Calendar is broken." });
+check($("#calendar-list").textContent === "Calendar is broken." && !visible($("#calendar-privacy")), "an error is shown");
+await press("#calendar-close");
+check(visible($("[data-task=proofread]")), "closing the calendar brings the buttons back");
+await press("#calendar-chip");
+key("Escape");
+check(visible($("#calendar-chip")) && !visible($("#calendar-view")), "Esc closes the calendar but not the notch");
+ok("calendar: events, days, permission, errors and closing");
 
 // --- Unread ---
 await collapse();

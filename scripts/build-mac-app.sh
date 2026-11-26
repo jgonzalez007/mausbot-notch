@@ -25,10 +25,11 @@ swiftc -O \
   -framework Cocoa \
   -framework WebKit \
   -framework Carbon \
+  -framework EventKit \
   -framework ApplicationServices \
   -framework Vision \
   -framework ScreenCaptureKit \
-  "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" \
+  "$ROOT_DIR/macos/CalendarEvents.swift" "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" \
   -o "$MACOS_DIR/MausBotNotch"
 
 # Auto-detect Developer ID / Apple Development certificate, or fall back to ad-hoc signing

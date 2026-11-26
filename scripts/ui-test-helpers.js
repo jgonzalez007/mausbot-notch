@@ -17,7 +17,7 @@ const visible = (el) => {
   const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
   return Boolean(top && (el === top || el.contains(top)));
 };
-const buttonName = (b) => b.id || b.dataset.task || b.dataset.prompt || b.dataset.tab || (b.closest("#refine-chips") ? "refine" : b.closest("#model-choices") ? "model-choice" : b.matches(".item") ? "item" : "row-copy");
+const buttonName = (b) => b.id || b.dataset.task || b.dataset.prompt || b.dataset.tab || (b.closest("#refine-chips") ? "refine" : b.closest("#model-choices") ? "model-choice" : b.matches(".item") ? "item" : b.matches(".calendar-event-open") ? "event-open" : b.matches(".calendar-event-join") ? "event-join" : "row-copy");
 const press = async (target, why = target) => {
   const el = typeof target === "string" ? $(target) : target;
   el?.scrollIntoView({ block: "nearest" });

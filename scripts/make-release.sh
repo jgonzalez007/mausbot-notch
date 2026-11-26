@@ -28,11 +28,11 @@ SWIFT_FLAGS=(-O -framework Cocoa -framework WebKit -framework Carbon)
 
 echo "[release] Compiling arm64..."
 swiftc "${SWIFT_FLAGS[@]}" -target arm64-apple-macosx13.0 \
-  "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" -o "$BUILD_DIR/MausBotNotch-arm64"
+  "$ROOT_DIR/macos/CalendarEvents.swift" "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" -o "$BUILD_DIR/MausBotNotch-arm64"
 
 echo "[release] Compiling x86_64..."
 swiftc "${SWIFT_FLAGS[@]}" -target x86_64-apple-macosx13.0 \
-  "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" -o "$BUILD_DIR/MausBotNotch-x86_64"
+  "$ROOT_DIR/macos/CalendarEvents.swift" "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" -o "$BUILD_DIR/MausBotNotch-x86_64"
 
 lipo -create -output "$MACOS_DIR/MausBotNotch" \
   "$BUILD_DIR/MausBotNotch-arm64" "$BUILD_DIR/MausBotNotch-x86_64"
