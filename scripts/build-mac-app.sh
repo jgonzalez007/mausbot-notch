@@ -28,7 +28,7 @@ swiftc -O \
   -framework ApplicationServices \
   -framework Vision \
   -framework ScreenCaptureKit \
-  "$ROOT_DIR/macos/NotchApp.swift" \
+  "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/NotchApp.swift" \
   -o "$MACOS_DIR/MausBotNotch"
 
 # Auto-detect Developer ID / Apple Development certificate, or fall back to ad-hoc signing

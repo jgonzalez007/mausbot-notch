@@ -79,6 +79,11 @@ body.browser-preview {
     inset -0.5px 0 0 rgba(255, 255, 255, 0.08);
 }
 
+/* A collapsed pill with something to read widens to fit the preview. */
+.notch-pouch[data-expanded="false"][data-unread="true"] {
+  width: 360px;
+}
+
 /* Concave top ears that blend into the top bezel at y = 0 */
 .notch-ear {
   position: absolute;
@@ -162,6 +167,53 @@ body.browser-preview {
   flex: 1;
 }
 
+.notch-pouch[data-expanded="false"][data-unread="true"] .collapsed-name {
+  flex: 0 0 auto;
+}
+
+.collapsed-preview {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  text-align: left;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collapsed-unread {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bot-ink);
+  color: #000000;
+  font: 600 10px/15px -apple-system, BlinkMacSystemFont, sans-serif;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* One dot, in its own color, per other bot with an unread reply */
+.collapsed-others {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.collapsed-others span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.collapsed-preview[hidden],
+.collapsed-unread[hidden],
+.notch-pouch[data-expanded="true"] .collapsed-preview,
+.notch-pouch[data-expanded="true"] .collapsed-unread {
+  display: none !important;
+}
+
 .collapsed-dot {
   width: 6px;
   height: 6px;
@@ -202,6 +254,7 @@ body.browser-preview {
   width: 100%;
   /* flex: 1 so it fills whatever height remains after the bar */
   flex: 1;
+  min-height: 0;
   padding: 8px 16px 15px;
 }
 
@@ -289,6 +342,7 @@ body.browser-preview {
   width: 100%;
   height: 32px;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .nav-chevron-btn {
@@ -420,6 +474,8 @@ body.browser-preview {
 }
 
 .action-chips[hidden],
+.stop-area[hidden],
+.transcript-view[hidden],
 .result-view[hidden],
 .chip[hidden] {
   display: none !important;
@@ -472,6 +528,13 @@ body.browser-preview {
   height: 480px;
 }
 
+.notch-pouch[data-expanded="true"][data-view="transcript"] {
+  width: 560px;
+  height: 480px;
+}
+
+.notch-pouch[data-view="transcript"] .bot-title-block,
+.notch-pouch[data-view="transcript"] .action-chips,
 .notch-pouch[data-result="true"] .bot-title-block,
 .notch-pouch[data-result="true"] .action-chips,
 .notch-pouch[data-result="true"] .bottom-nav-row {
@@ -582,4 +645,91 @@ body.browser-preview {
   font-size: 10.5px;
   color: var(--text-muted);
   padding: 0 4px;
+}
+
+/* ============================================================================
+   TRANSCRIPT + STOP WAITING
+   ============================================================================ */
+.stop-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.stop-elapsed {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.transcript-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.transcript-empty {
+  margin: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.transcript-msg {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 90%;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.transcript-msg.user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.transcript-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.transcript-msg.unread .transcript-meta::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--bot-ink);
+}
+
+.transcript-meta .result-btn {
+  margin-left: auto;
+  padding: 2px 4px;
+  font-size: 10px;
+}
+
+.transcript-text {
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
 }

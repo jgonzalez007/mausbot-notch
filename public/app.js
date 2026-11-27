@@ -24,17 +24,32 @@ function postNativeMessage(payload) {
 // state.status: "idle" | "sending" | "working" | "needs_approval" | "error"
 const state = {
   expanded: false,
+  passive: false, // open because a bot replied: shown without taking the keyboard
   typing: false,
   bots: [],
   selectedBotId: null,
   status: "idle",
-  statusCaption: ""
+  statusCaption: "",
+  view: "default", // "default" | "transcript"
+  transcript: { botId: null, entries: [] },
+  sends: {} // bot id -> when the message being sent was sent (ms); also identifies that send
 };
 
 const dom = {
   pouch: document.getElementById("notch-pouch"),
   collapsedBar: document.getElementById("collapsed-bar"),
   collapsedName: document.getElementById("collapsed-name"),
+  collapsedPreview: document.getElementById("collapsed-preview"),
+  collapsedOthers: document.getElementById("collapsed-others"),
+  collapsedUnread: document.getElementById("collapsed-unread"),
+  stopArea: document.getElementById("stop-area"),
+  stopElapsed: document.getElementById("stop-elapsed"),
+  stopBtn: document.getElementById("stop-btn"),
+  transcriptChip: document.getElementById("transcript-chip"),
+  transcriptView: document.getElementById("transcript-view"),
+  transcriptList: document.getElementById("transcript-list"),
+  transcriptCopy: document.getElementById("transcript-copy"),
+  transcriptClose: document.getElementById("transcript-close"),
   botTitleBlock: document.getElementById("bot-title-block"),
   botNameLabel: document.getElementById("bot-name-label"),
   botStatusCaption: document.getElementById("bot-status-caption"),
@@ -57,6 +72,10 @@ const dom = {
   refineChips: document.getElementById("refine-chips"),
   resultFooter: document.getElementById("result-footer")
 };
+
+function findBot(botId) {
+  return state.bots.find((b) => b.id === botId);
+}
 
 function getSelectedBot() {
   return state.bots.find((b) => b.id === state.selectedBotId) || state.bots[0] || null;
@@ -90,6 +109,7 @@ function reportHitRectToNative() {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
     isOpen: state.expanded,
+    isPassive: state.passive,
     isTyping: state.typing,
     status: state.status,
     botName: bot?.name || "MausBot"
@@ -99,18 +119,24 @@ function reportHitRectToNative() {
 const resizeObserver = new ResizeObserver(() => reportHitRectToNative());
 resizeObserver.observe(dom.pouch);
 
-function setExpanded(expanded) {
+function setExpanded(expanded, { passive = false } = {}) {
   const next = Boolean(expanded);
-  if (state.expanded === next) return;
+  if (state.expanded === next) {
+    if (next && !passive) takeKeyboard();
+    return;
+  }
   state.expanded = next;
+  state.passive = next && passive;
   dom.pouch.dataset.expanded = String(next);
   if (next) {
     refreshBootstrap();
     showDeferredReply();
+    showUnread();
   } else {
     setTypingMode(false);
     closeResult();
     showRewriteMenu(false);
+    closeTranscript();
   }
   reportHitRectToNative();
   let steps = 0;
@@ -118,6 +144,14 @@ function setExpanded(expanded) {
     reportHitRectToNative();
     if (++steps > 10) clearInterval(timer);
   }, 35);
+}
+
+// The user touched a notch that had opened by itself: from here on it may have the keyboard.
+function takeKeyboard() {
+  if (!state.passive) return;
+  state.passive = false;
+  reportHitRectToNative();
+  showUnread();
 }
 
 function setTypingMode(typing, initialChar = "") {
@@ -147,6 +181,9 @@ function renderPouch() {
   const bot = getSelectedBot();
   dom.pouch.dataset.result = state.result && state.expanded ? "true" : "false";
   renderResult();
+  renderTranscript();
+  renderStopArea();
+  renderUnread();
   if (!bot) {
     dom.botNameLabel.textContent = "No bots configured";
     dom.botNameLabel.hidden = false;
@@ -187,7 +224,11 @@ async function selectBot(botId) {
   state.status = "idle";
   state.statusCaption = "";
   state.copyText = "";
+  stopReplyPoll();
+  showWaiting();
   renderPouch();
+  showUnread();
+  if (state.view === "transcript") pollTranscriptOnce(bot.id);
 
   apiFetch("/api/select-bot", {
     method: "POST",
@@ -240,10 +281,13 @@ function handleServerEvent(evt) {
   if (!evt || typeof evt !== "object" || !evt.type) return;
 
   const isCurrent = evt.botId ? evt.botId === state.selectedBotId : true;
+  if (evt.type === "status") setWaiting(evt.botId, findBot(evt.botId)?.waitingSinceMs || Date.now());
+  if (evt.type === "reply" || evt.type === "timeout") setWaiting(evt.botId, null);
 
   // Don't let bot events overwrite an open result card or a draft being written.
   // A reply that lands meanwhile is shown when the card closes or the notch next opens.
-  if (isCurrent && (state.result || state.drafting)) {
+  const draftToRead = state.copyText && state.expanded;
+  if (isCurrent && (state.result || state.drafting || draftToRead)) {
     if (evt.type === "reply") state.deferredReplyBotId = evt.botId;
     if (evt.type === "reply" || evt.type === "hello") refreshBootstrap();
     return;
@@ -253,7 +297,8 @@ function handleServerEvent(evt) {
     if (isCurrent) {
       state.copyText = ""; // the caption becomes the reply, so a click must not copy an old draft
       // Pop the notch and pull the latest transcript so the caption updates.
-      if (!state.expanded) setExpanded(true);
+      // It must not take the keyboard from whatever the user is typing in.
+      if (!state.expanded) setExpanded(true, { passive: true });
       pollTranscriptOnce(evt.botId);
     }
     // Replies for other bots are kept in state.json; they show when you
@@ -294,11 +339,15 @@ async function sendMessage(text) {
   const bot = getSelectedBot();
   if (!bot) return;
 
+  cancelDraft();
   stopReplyPoll();
+  const startedMs = Date.now();
+  state.sends[bot.id] = startedMs;
   state.copyText = "";
   state.status = "sending";
   state.statusCaption = "Sending…";
   renderPouch();
+  if (state.view === "transcript") pollTranscriptOnce(bot.id);
 
   let sendRes;
   try {
@@ -308,9 +357,23 @@ async function sendMessage(text) {
       body: JSON.stringify({ text })
     }).then((r) => r.json());
   } catch (err) {
-    state.status = "error";
-    state.statusCaption = err.message || "Failed to send";
-    renderPouch();
+    sendRes = { ok: false, error: err.message };
+  }
+  // Stopped, or another message was sent to this bot meanwhile: this answer is no longer wanted.
+  if (state.sends[bot.id] !== startedMs) return;
+  delete state.sends[bot.id];
+  if (sendRes.status === "stopped") return;
+  const stillWorking = sendRes.ok && sendRes.status !== "done" && sendRes.status !== "error";
+  if (stillWorking) setWaiting(bot.id, startedMs);
+  // The user moved on to another bot: its reply shows up there as unread.
+  if (state.selectedBotId !== bot.id) {
+    refreshBootstrap();
+    return;
+  }
+  // They opened a result card or a draft instead: the reply shows when that closes.
+  if (isBusyWithText()) {
+    state.deferredReplyBotId = bot.id;
+    refreshBootstrap();
     return;
   }
 
@@ -321,7 +384,7 @@ async function sendMessage(text) {
     return;
   }
 
-  if (sendRes.status === "done" || sendRes.status === "error") {
+  if (!stillWorking) {
     await pollTranscriptOnce(bot.id);
     return;
   }
@@ -330,7 +393,11 @@ async function sendMessage(text) {
   state.statusCaption = sendRes.status === "needs_approval" ? "Waiting on your approval…" : "Working…";
   renderPouch();
 
-  const targetBotId = bot.id;
+  startReplyPoll(bot.id);
+}
+
+function startReplyPoll(targetBotId) {
+  stopReplyPoll();
   let attempts = 0;
   activeReplyPoll = setInterval(async () => {
     attempts++;
@@ -352,14 +419,20 @@ async function pollTranscriptOnce(botId) {
     if (!res.ok) return false;
     if (state.selectedBotId !== botId) return res.pending;
 
+    state.transcript = { botId, entries: res.entries };
     const last = res.entries[res.entries.length - 1];
-    if (last && last.role === "assistant") {
-      state.status = res.pending ? state.status : "idle";
-      state.statusCaption = last.text;
-      renderPouch();
-    } else if (res.pending) {
-      renderPouch();
+    const bot = findBot(botId);
+    if (bot) {
+      bot.unreadCount = res.entries.filter((e) => e.unread).length;
+      bot.lastReplyPreview = res.entries.findLast((e) => e.role === "assistant")?.text.slice(0, 80) || "";
+      if (!res.pending && !res.sending) bot.waitingSinceMs = null;
     }
+    if (last && last.role === "assistant" && !res.sending && !isBusyWithText()) {
+      state.status = res.pending ? "working" : "idle";
+      state.statusCaption = last.text;
+    }
+    renderPouch();
+    markShownAsRead(botId, last);
     return res.pending;
   } catch {
     return true;
@@ -367,8 +440,215 @@ async function pollTranscriptOnce(botId) {
 }
 
 // ============================================================================
+// UNREAD REPLIES
+// ============================================================================
+// A result card or a draft is on screen: a bot's reply must not overwrite it.
+function isBusyWithText() {
+  return Boolean(state.result || state.drafting || (state.copyText && state.expanded));
+}
+
+function showUnread() {
+  const bot = getSelectedBot();
+  if (bot?.unreadCount && state.expanded && !isBusyWithText()) pollTranscriptOnce(bot.id);
+}
+
+// Only what the user can be looking at counts as read: an open notch that they opened or touched.
+function markShownAsRead(botId, last) {
+  const bot = findBot(botId);
+  if (!last || !bot?.unreadCount || !state.expanded || state.passive || isBusyWithText()) return;
+  apiFetch(`/api/bot/${encodeURIComponent(botId)}/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lastMessageId: last.id })
+  })
+    .then((r) => r.json())
+    .then((res) => {
+      if (!res.ok) return;
+      bot.unreadCount = res.unreadCount;
+      refreshBootstrap();
+    })
+    .catch(() => {});
+}
+
+function renderUnread() {
+  const bot = getSelectedBot();
+  const count = bot?.unreadCount || 0;
+  dom.pouch.dataset.unread = String(count > 0);
+  dom.collapsedUnread.hidden = count === 0;
+  dom.collapsedUnread.textContent = count > 99 ? "99+" : String(count);
+  dom.collapsedPreview.hidden = count === 0;
+  dom.collapsedPreview.textContent = bot?.lastReplyPreview || "";
+  dom.collapsedOthers.replaceChildren(
+    ...state.bots
+      .filter((b) => b !== bot && b.unreadCount)
+      .map((b) => {
+        const dot = document.createElement("span");
+        dot.style.background = BOT_COLORS[b.color] || DEFAULT_BOT_COLOR;
+        dot.title = `${b.name}: ${b.unreadCount} unread`;
+        return dot;
+      })
+  );
+}
+
+// ============================================================================
+// WAITING FOR A REPLY: elapsed time + stop
+// ============================================================================
+function setWaiting(botId, sinceMs) {
+  const bot = findBot(botId);
+  if (bot) bot.waitingSinceMs = sinceMs;
+}
+
+function waitingSince(bot) {
+  return bot ? state.sends[bot.id] || bot.waitingSinceMs : null;
+}
+
+// Coming back to a bot that still owes a reply.
+function showWaiting() {
+  const bot = getSelectedBot();
+  if (!waitingSince(bot) || isBusyWithText()) return;
+  state.status = "working";
+  state.statusCaption = "Working…";
+  if (!state.sends[bot.id]) startReplyPoll(bot.id);
+}
+
+let elapsedTimer = null;
+
+function renderStopArea() {
+  const since = waitingSince(getSelectedBot());
+  const show = Boolean(since) && state.expanded && !state.result && !state.drafting;
+  dom.stopArea.hidden = !show;
+  if (show) {
+    const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000));
+    dom.stopElapsed.textContent = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    elapsedTimer ??= setInterval(renderStopArea, 1000);
+  } else if (elapsedTimer) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+}
+
+async function stopWaiting() {
+  const bot = getSelectedBot();
+  if (!bot) return;
+  dom.stopBtn.disabled = true;
+  const res = await apiFetch(`/api/bot/${encodeURIComponent(bot.id)}/stop`, { method: "POST" })
+    .then((r) => r.json())
+    .catch((err) => ({ ok: false, error: err.message }));
+  dom.stopBtn.disabled = false;
+  if (res.ok) {
+    delete state.sends[bot.id];
+    setWaiting(bot.id, null);
+  }
+  if (state.selectedBotId !== bot.id) return;
+  if (res.ok) stopReplyPoll();
+  state.status = res.ok ? "idle" : "error";
+  state.statusCaption = res.ok
+    ? `Stopped waiting. ${bot.name} may still finish this in OpenMausBot.`
+    : res.error || "Couldn't stop waiting.";
+  renderPouch();
+}
+
+dom.stopBtn.addEventListener("click", stopWaiting);
+
+// ============================================================================
+// TRANSCRIPT
+// ============================================================================
+function openTranscript() {
+  const bot = getSelectedBot();
+  if (!bot) return;
+  state.view = "transcript";
+  dom.transcriptList.dataset.shown = "";
+  renderPouch();
+  pollTranscriptOnce(bot.id);
+}
+
+function closeTranscript() {
+  if (state.view !== "transcript") return;
+  state.view = "default";
+  renderPouch();
+}
+
+function formatTime(ms) {
+  const date = new Date(ms);
+  const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  return date.toDateString() === new Date().toDateString()
+    ? time
+    : `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+function transcriptSpeaker(entry) {
+  return entry.role === "user" ? "You" : getSelectedBot()?.name || "Bot";
+}
+
+function copyFrom(button, text) {
+  postNativeMessage({ type: "copyToClipboard", text });
+  const label = button.textContent;
+  if (label === "Copied") return;
+  button.textContent = "Copied";
+  setTimeout(() => (button.textContent = label), 900);
+}
+
+function transcriptRow(entry) {
+  const row = document.createElement("div");
+  row.className = `transcript-msg${entry.role === "user" ? " user" : ""}${entry.unread ? " unread" : ""}`;
+  const meta = document.createElement("div");
+  meta.className = "transcript-meta";
+  const label = document.createElement("span");
+  label.textContent = `${transcriptSpeaker(entry)} · ${formatTime(entry.timestampMs)}`;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "result-btn";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", () => copyFrom(copy, entry.text));
+  meta.append(label, copy);
+  const text = document.createElement("div");
+  text.className = "transcript-text";
+  text.textContent = entry.text;
+  row.append(meta, text);
+  return row;
+}
+
+function renderTranscript() {
+  const bot = getSelectedBot();
+  const show = state.view === "transcript" && state.expanded && !state.result;
+  dom.transcriptView.hidden = !show;
+  dom.pouch.dataset.view = show ? "transcript" : "default";
+  if (!show) return;
+  const entries = state.transcript.botId === bot?.id ? state.transcript.entries : [];
+  dom.transcriptCopy.disabled = entries.length === 0;
+  // Rebuilt only when something changed, so reading back and selecting text aren't interrupted.
+  const list = dom.transcriptList;
+  const key = `${bot?.id} ${entries.map((e) => `${e.id}${e.unread ? "*" : ""}`).join(" ")}`;
+  if (list.dataset.shown === key) return;
+  const sameBot = list.dataset.shown.startsWith(`${bot?.id} `);
+  const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  const { scrollTop } = list;
+  list.dataset.shown = key;
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "transcript-empty";
+    empty.textContent = `No messages with ${bot?.name || "this bot"} yet.`;
+    list.replaceChildren(empty);
+    return;
+  }
+  list.replaceChildren(...entries.map(transcriptRow));
+  list.scrollTop = sameBot && !atEnd ? scrollTop : list.scrollHeight;
+}
+
+dom.transcriptChip.addEventListener("click", openTranscript);
+dom.transcriptClose.addEventListener("click", closeTranscript);
+dom.transcriptCopy.addEventListener("click", () => {
+  const text = state.transcript.entries
+    .map((e) => `[${transcriptSpeaker(e)} · ${formatTime(e.timestampMs)}]\n${e.text}`)
+    .join("\n\n");
+  if (text) copyFrom(dom.transcriptCopy, text);
+});
+
+// ============================================================================
 // EVENTS & SHORTCUTS
 // ============================================================================
+
+dom.pouch.addEventListener("pointerdown", takeKeyboard, true);
 
 // Collapsed: click to expand. Expanded: click is disabled via pointer-events:none in CSS.
 dom.collapsedBar.addEventListener("click", () => {
@@ -447,6 +727,10 @@ window.addEventListener("keydown", (e) => {
       setTypingMode(false);
       return;
     }
+    if (state.view === "transcript") {
+      closeTranscript();
+      return;
+    }
     setExpanded(false);
     return;
   }
@@ -470,28 +754,51 @@ window.addEventListener("keydown", (e) => {
 // user with the local model, show it, and hand it back to be written into Mail or at the cursor.
 // ============================================================================
 let draftCloseTimer = null;
+// Every double-tap gets an id from the native side. Only the newest one may show or write anything,
+// so a slow draft for one conversation can't land in the next.
+let draftId = 0;
+let draftRequest = null;
 
-async function draftReply(context, destination) {
-  stopReplyPoll();
-  closeResult(false);
+function beginDraft(id) {
+  draftId = id;
+  draftRequest?.abort();
+  draftRequest = null;
   clearTimeout(draftCloseTimer);
   state.copyText = "";
   state.drafting = true;
+}
+
+// The user started something else in the notch: the draft they asked for before must not pop up over
+// it or be pasted behind it.
+function cancelDraft() {
+  if (!state.drafting) return;
+  beginDraft(-1);
+  state.drafting = false;
+}
+
+async function draftReply(id, context, destination) {
+  if (id !== draftId) return;
+  stopReplyPoll();
+  closeResult(false);
   state.status = "working";
   state.statusCaption = context && context.kind === "mail" ? "Writing a reply to this email…" : "Writing a reply…";
   renderPouch();
+  const request = new AbortController();
+  draftRequest = request;
   let res;
   try {
     res = await apiFetch("/api/draft-reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(context || {})
+      body: JSON.stringify(context || {}),
+      signal: request.signal
     }).then((r) => r.json());
   } catch (err) {
     res = { ok: false, error: err.message || "Couldn't write a reply." };
-  } finally {
-    state.drafting = false;
   }
+  if (id !== draftId) return;
+  draftRequest = null;
+  state.drafting = false;
   if (!res.ok) {
     state.status = "error";
     state.statusCaption = res.error || "Couldn't write a reply.";
@@ -500,11 +807,16 @@ async function draftReply(context, destination) {
   }
   state.copyText = res.draft;
   state.status = "idle";
-  state.statusCaption = destination === "awaitingCursor"
+  // Typing a message in the notch right now: taking the keyboard away would be worse than a click.
+  const showOnly = destination === "awaitingCursor" || state.typing;
+  state.statusCaption = showOnly
     ? `${res.draft}\n\n(Click to copy, then paste it in your reply.)`
     : res.draft;
+  if (!showOnly) {
+    state.drafting = true; // until the native side says it was written, or wasn't
+    postNativeMessage({ type: "writeDraft", id, text: res.draft });
+  }
   renderPouch();
-  if (destination !== "awaitingCursor") postNativeMessage({ type: "writeDraft", text: res.draft });
 }
 
 // ============================================================================
@@ -539,6 +851,7 @@ function showRewriteMenu(show) {
 }
 
 function startScreenTask(task, promptId) {
+  cancelDraft();
   stopReplyPoll();
   setTypingMode(false);
   showRewriteMenu(false);
@@ -653,6 +966,7 @@ function closeResult(render = true) {
   state.result = null;
   state.status = "idle";
   if (render) {
+    showWaiting();
     renderPouch();
     showDeferredReply();
   }
@@ -729,28 +1043,37 @@ window.__notchCommand = async (cmd) => {
   if (!cmd || typeof cmd !== "object") return;
   switch (cmd.action) {
     case "toggleExpand":
-      setExpanded(!state.expanded);
+      // ⌥Space on a notch that opened by itself means "let me use it", not "close it".
+      if (state.expanded && state.passive && cmd.byUser) takeKeyboard();
+      else setExpanded(!state.expanded);
       break;
     case "screenAnswerReading":
       // Double-tap ⌘ (bare, no other key): the native side is reading the email, Slack
       // conversation, selected text, clipboard, or screen OCR in front of the user.
+      beginDraft(cmd.id);
       setExpanded(true);
       setTypingMode(false);
       stopReplyPoll();
       closeResult(false);
+      closeTranscript();
       state.status = "working";
       state.statusCaption = "Reading your screen…";
       renderPouch();
       break;
     case "draftReply":
-      draftReply(cmd.context, cmd.destination);
+      draftReply(cmd.id, cmd.context, cmd.destination);
       break;
     case "draftWriting":
+      if (cmd.id !== draftId) break;
+      state.passive = state.expanded; // the keyboard goes back to the user's app
+      reportHitRectToNative();
       state.status = "working";
       state.statusCaption = cmd.caption || "Writing…";
       renderPouch();
       break;
     case "draftWritten":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       // Like Kai: say where it went, then get out of the way of the email.
       state.status = "idle";
       state.statusCaption = cmd.caption || "Written. Review it and send it yourself.";
@@ -761,11 +1084,15 @@ window.__notchCommand = async (cmd) => {
       }, 2500);
       break;
     case "draftWriteFailed":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       state.status = "idle";
       state.statusCaption = `${cmd.error || "Couldn't write the draft."}\n\n${state.copyText || ""}`.trim();
       renderPouch();
       break;
     case "screenAnswerFailed":
+      if (cmd.id !== draftId) break;
+      state.drafting = false;
       stopReplyPoll();
       state.status = "error";
       state.statusCaption = cmd.error || "Couldn't read your screen.";
@@ -806,6 +1133,8 @@ window.__notchCommand = async (cmd) => {
       } else if (state.typing) {
         dom.typeInput.value = "";
         setTypingMode(false);
+      } else if (state.view === "transcript") {
+        closeTranscript();
       } else if (state.expanded) {
         setExpanded(false);
       }
@@ -849,6 +1178,9 @@ async function refreshBootstrap() {
         bots: state.bots.map((b) => ({ id: b.id, name: b.name })),
         selectedBotId: state.selectedBotId
       });
+    } else {
+      renderUnread();
+      renderStopArea();
     }
   } catch {}
 }

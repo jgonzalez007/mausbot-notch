@@ -24,6 +24,9 @@
         <button id="collapsed-bar" class="collapsed-bar" type="button" title="Expand MausBot Notch (⌥Space)">
           <span id="collapsed-mark" class="collapsed-mark"></span>
           <span id="collapsed-name" class="collapsed-name">MausBot</span>
+          <span id="collapsed-preview" class="collapsed-preview" hidden></span>
+          <span id="collapsed-others" class="collapsed-others"></span>
+          <span id="collapsed-unread" class="collapsed-unread" hidden></span>
           <span id="collapsed-dot" class="collapsed-dot" aria-hidden="true"></span>
         </button>
 
@@ -36,11 +39,18 @@
             <span id="bot-status-caption" class="bot-status-caption" hidden></span>
           </div>
 
+          <!-- Shown while waiting for a bot's reply -->
+          <div id="stop-area" class="stop-area" hidden>
+            <span id="stop-elapsed" class="stop-elapsed"></span>
+            <button id="stop-btn" class="chip" type="button" title="Stop waiting for this reply. The bot itself may still finish it.">Stop waiting</button>
+          </div>
+
           <!-- Kai OS quick actions on what's on screen / what you're writing -->
           <div id="action-chips" class="action-chips">
             <button class="chip" type="button" data-task="summarize" title="Summarize what is showing on your screen">Summarize</button>
             <button class="chip" type="button" data-task="proofread" title="Proofread the text you're writing (or the main text on your screen)">Proofread</button>
             <button id="rewrite-chip" class="chip" type="button" title="Rewrite the text you selected">Rewrite ▾</button>
+            <button id="transcript-chip" class="chip chip-quiet" type="button" title="Show the conversation with this bot">Transcript</button>
           </div>
           <div id="rewrite-menu" class="action-chips" hidden>
             <button class="chip" type="button" data-prompt="starter-concise">Make it concise</button>
@@ -67,6 +77,17 @@
               <div id="refine-chips" class="refine-chips"></div>
             </div>
             <div id="result-footer" class="result-footer"></div>
+          </div>
+
+          <!-- Conversation with the selected bot -->
+          <div id="transcript-view" class="transcript-view" hidden>
+            <div class="result-header">
+              <span class="result-title">Transcript</span>
+              <span class="result-spacer"></span>
+              <button id="transcript-copy" class="result-btn" type="button" title="Copy the whole conversation">Copy all</button>
+              <button id="transcript-close" class="result-btn result-close" type="button" title="Close (Esc)">✕</button>
+            </div>
+            <div id="transcript-list" class="transcript-list"></div>
           </div>
 
           <!-- Bottom row: < (prev bot) | tap-to-type | > (next bot) -->

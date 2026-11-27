@@ -145,14 +145,22 @@ Double-tap ⌘ and the notch writes your reply to what's in front of you:
 
 1. It reads the **selected email in Mail**, the **Slack conversation**, your **highlighted text**, or
    (anywhere else) the **app's window from a screenshot**, read on this Mac with Vision.
-2. A **local Ollama model** drafts the reply as you, with no tools. The email's text is treated as
-   data, so instructions hidden in it can't make anything happen. The model already loaded in
-   Ollama is used (fastest), otherwise the first installed one; set
-   `"reply": { "model": "qwen3:30b", "ollamaUrl": "http://127.0.0.1:11434" }` in `config.json` to choose.
+2. A **local model** drafts the reply as you, with no tools. The email's text is treated as
+   data, so instructions hidden in it can't make anything happen. Choose the model in
+   `config.json`, either from Ollama:
+   `"reply": { "ollamaUrl": "http://127.0.0.1:11434", "model": "qwen3:30b" }`
+   or from any OpenAI-compatible local server (MTPLX, LM Studio, llama.cpp):
+   `"reply": { "openaiUrl": "http://127.0.0.1:8001/v1", "model": "the-model" }`.
+   With no `reply` setting, the model already loaded in Ollama is used, otherwise the smallest
+   installed one. Embedding and cloud models are never picked on their own.
 3. The draft is written where you'll send it, and **never sent**:
    - cursor in a message box (Slack, an email body) → typed right there;
    - email selected in Mail → Mail opens its own reply (Mail picks the recipient) with the draft in it;
    - otherwise → shown in the notch; click it to copy.
+
+Before pasting, the notch checks that the same app, window, conversation and text box are still in
+front, and looks again right before the key press. If anything moved, nothing is pasted and the draft
+is shown to copy. A newer double-tap cancels the one before it.
 
 ## 📝 Summarize, Proofread, Rewrite (same as Kai OS)
 
@@ -162,7 +170,13 @@ Click the notch to open it (540 wide, Kai's size). Three buttons sit under the b
 - **Proofread** fixes the text field you were typing in (or your selection), and falls back to the screen when there is none. The card shows the corrected text and a list of changes. Follow-ups: More formal, Friendlier, Shorter.
 - **Rewrite ▾** offers Make it concise, Explain simply, Turn into bullets and Translate to Spanish for the text you selected or are editing.
 
-Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the local Ollama model, so nothing leaves this Mac.
+Results open in Kai's 560×480 card with Copy. Text is only put back into the app when you press **Replace**: the text is set directly, checked, and pasted as a fallback. Everything runs on the same local model, so nothing leaves this Mac.
+
+## 💬 Transcript, unread replies, Stop waiting
+
+- **Transcript** (next to the three buttons) shows the kept conversation with this bot: scroll, times, Copy on each message and Copy all. Esc or × closes it.
+- **Unread replies**: the collapsed notch shows the latest unread reply and a count for the current bot, plus a dot when another bot has one. Opening the reply marks it read.
+- **Stop waiting** appears with the elapsed time while a reply is on its way. It ends the notch's wait only: the Bot API has no way to cancel a run, so the bot may still finish in OpenMausBot.
 
 ## 🔐 macOS permissions (double-⌘)
 
@@ -187,6 +201,7 @@ without rebuilding (`./scripts/launch.sh`) keeps the permissions. An "Apple Deve
 mausbot-notch/
 ├── macos/
 │   ├── NotchApp.swift        # Native NSPanel + WKWebView hit-testing + Carbon global ⌥Space hotkey
+│   ├── DraftSpot.swift       # Rules for "is this still the conversation the draft is for?"
 │   ├── Info.plist            # LSUIElement bundle metadata
 │   └── entitlements.plist    # Network client/server entitlements
 ├── public/
@@ -196,12 +211,14 @@ mausbot-notch/
 ├── server.mjs                # Local Node.js bridge to the OpenMausBot Bot API (+ SSE, /api/notify, background poller)
 ├── config.example.json       # Template copied to the real bots config on first setup
 ├── install.sh                # Release installer: download DMG → /Applications → launch
-├── .github/workflows/        # ci.yml (build + smoke test), release.yml (tag → universal DMG release)
+├── .github/workflows/        # ci.yml (build + tests), release.yml (tag → universal DMG release)
 └── scripts/
     ├── setup.sh               # Prerequisite check, config template, build & launch
     ├── build-mac-app.sh        # Compiles the Swift binary & signs MausBot Notch.app
     ├── make-release.sh         # Universal (arm64 + x86_64) build + DMG + sha256
     ├── smoke-test.sh           # Boots the bridge in a throwaway HOME; asserts auth, Host/Origin, SSE
+    ├── bridge-test.mjs         # Bridge against a fake Bot API: replies, stop, unread
+    ├── ui-test.mjs             # Opens the notch screen and presses every button (ui-host.swift, ui-test-page.js)
     └── launch.sh               # Starts the local bridge server & opens MausBot Notch.app
 ```
 
@@ -215,10 +232,10 @@ mausbot-notch/
 3. A `200` reply is shown immediately. A `202` (`status: "working"` or
    `"needs_approval"`) means the bot is still working or waiting on you in the
    app itself; the notch polls `GET /api/bot/<id>/transcript` every two
-   seconds, which re-checks `GET {baseUrl}/hooks/api/bots/<id>/messages?thread=<id>`
+   seconds, which at most every 8 seconds re-checks `GET {baseUrl}/hooks/api/bots/<id>/messages?thread=<id>`
    until a reply lands.
 4. Replies and errors are kept, per bot, in
-   `~/Library/Application Support/MausBot Notch/state.json` (the last 20
+   `~/Library/Application Support/MausBot Notch/state.json` (the last 100
    messages), so switching bots and reopening the notch shows the latest
    status again.
 
@@ -232,8 +249,10 @@ The Bot API is outbound-only, so "inbound" is built in three layers:
    is closed or the app was relaunched. When a reply lands, it is stored in
    `state.json` and pushed to the open UI over server-sent events
    (`GET /api/events`), which pops the notch and refreshes the caption.
-   Polling respects the Bot API's 10 calls/min per key (60 s cooldown,
-   5 min backoff on `429`) and gives up on a thread after 30 minutes.
+   The open notch and this poller share one limiter (8 s apart while open, 60 s in the
+   background, at most 8 of the Bot API's 10 calls a minute). A `429` or server error waits
+   (`Retry-After`, or 60 s) and tries again, so the reply isn't lost. It gives up on a thread
+   after 30 minutes. A reply opens the notch without taking the keyboard.
 2. **`POST /api/notify`.** A loopback endpoint for same-host pushes. Point a
    same-host OpenMausBot instance (or a hook script) at
    `http://127.0.0.1:4799/api/notify` with the stable `notifyToken` from
