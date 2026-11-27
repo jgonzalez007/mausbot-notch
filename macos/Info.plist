@@ -31,6 +31,10 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>The notch's Calendar view shows your events for the day. It never changes them.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>The notch's Calendar view shows your events for the day. It never changes them.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Double-tap ⌘ reads the email you have selected in Mail, so it can be answered.</string>
 </dict>

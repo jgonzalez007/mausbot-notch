@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_OLLAMA_URL, SettingsError, configPresets, createSettings, presetsForBot } from "./settings.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -32,17 +33,18 @@ function ensureSupportDir() {
 
 function initLaunchAuthToken() {
   const fromEnv = process.env.MAUSBOT_NOTCH_AUTH_TOKEN;
-  const token =
-    typeof fromEnv === "string" && fromEnv.length >= 32
-      ? fromEnv
-      : crypto.randomBytes(32).toString("base64url");
+  return typeof fromEnv === "string" && fromEnv.length >= 32 ? fromEnv : crypto.randomBytes(32).toString("base64url");
+}
+
+// Only once this bridge has the port: a second one that can't start must not replace the token the
+// running one answers to.
+function writeLaunchAuthToken() {
   ensureSupportDir();
   try {
-    fs.writeFileSync(AUTH_TOKEN_FILE, token, { mode: 0o600, encoding: "utf8" });
+    fs.writeFileSync(AUTH_TOKEN_FILE, LAUNCH_AUTH_TOKEN, { mode: 0o600, encoding: "utf8" });
   } catch (err) {
     console.error("[mausbot-notch] Failed to write launch auth token file:", err.message);
   }
-  return token;
 }
 
 const LAUNCH_AUTH_TOKEN = initLaunchAuthToken();
@@ -476,14 +478,10 @@ function modelSignal(res) {
   return controller.signal;
 }
 
-function injectAuthTokenIntoHtml(html) {
-  const escaped = LAUNCH_AUTH_TOKEN.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-  const snippet = `<script>window.__MAUSBOT_NOTCH_AUTH_TOKEN='${escaped}';</script>`;
-  if (html.includes("</head>")) {
-    return html.replace("</head>", `${snippet}</head>`);
-  }
-  return `${snippet}${html}`;
-}
+// The pages never need anything from elsewhere, so text from a bot or the screen can't load or run it.
+const PAGE_POLICY =
+  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
+  "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -505,6 +503,7 @@ function getBootstrapData() {
       id: b.id,
       name: b.name || b.id,
       color: b.color || null,
+      presets: presetsForBot(config, b.id),
       unreadCount: messages.filter((m) => m.unread).length,
       lastReplyPreview: String(lastReply?.text || "").replace(/\s+/g, " ").trim().slice(0, 80),
       waitingSinceMs: sendsInFlight.get(b.id)?.startedMs ?? (entry?.pending ? entry.pendingSinceMs || Date.now() : null)
@@ -513,7 +512,7 @@ function getBootstrapData() {
   const selectedBotId = bots.some((b) => b.id === state.selectedBotId)
     ? state.selectedBotId
     : bots[0]?.id || null;
-  return { ok: true, bots, selectedBotId };
+  return { ok: true, bots, selectedBotId, openOnReply: config.openOnReply === true };
 }
 
 // ============================================================================
@@ -622,8 +621,7 @@ async function pickReplyModel(baseUrl, configured) {
   return smallest.name;
 }
 
-async function localChat(messages, temperature, signal) {
-  const cfg = readConfig().reply || {};
+async function localChat(messages, temperature, signal, cfg = readConfig().reply || {}) {
   try {
     return cfg.openaiUrl
       ? await openaiChat(cfg, messages, temperature, signal)
@@ -664,7 +662,7 @@ async function openaiChat(cfg, messages, temperature, signal) {
 }
 
 async function ollamaChat(cfg, messages, temperature, signal) {
-  const baseUrl = cfg.ollamaUrl || "http://127.0.0.1:11434";
+  const baseUrl = cfg.ollamaUrl || DEFAULT_OLLAMA_URL;
   let model;
   try {
     model = await pickReplyModel(baseUrl, cfg.model);
@@ -677,7 +675,7 @@ async function ollamaChat(cfg, messages, temperature, signal) {
     body: JSON.stringify({ model, messages, stream: false, think: false, options: { temperature }, keep_alive: "15m" }),
     signal
   });
-  if (res.status === 404) throw new Error(`${model} isn't installed in Ollama. Change reply.model in config.json.`);
+  if (res.status === 404) throw new Error(`${model} isn't installed in Ollama. Pick another model in Settings.`);
   if (!res.ok) throw new Error(`Ollama returned ${res.status} for ${model}.`);
   const data = await res.json();
   return { content: String(data?.message?.content || ""), model };
@@ -795,7 +793,9 @@ function screenTaskMessages(body) {
   }
   const text = stripTags(String(body.text || "").slice(0, MAX_TASK_TEXT), "text");
   if (body.task === "rewrite") {
-    const prompt = Object.hasOwn(QUICK_PROMPTS, body.promptId) ? QUICK_PROMPTS[body.promptId] : null;
+    const prompt = Object.hasOwn(QUICK_PROMPTS, body.promptId)
+      ? QUICK_PROMPTS[body.promptId]
+      : configPresets(readConfig()).find((p) => p.id === body.promptId);
     if (!prompt) throw new Error("Unknown rewrite option.");
     return [
       { role: "system", content: QUICK_PROMPT_RULES + ctx },
@@ -872,6 +872,20 @@ async function refineAnswer(body, signal) {
   if (!text) throw new Error("The model returned nothing. Try again.");
   return { text };
 }
+
+const settings = createSettings({
+  configFile: CONFIG_FILE,
+  recentCalls: recentBotApiCalls,
+  chat: (reply, messages, temperature, signal) => localChat(messages, temperature, signal, reply),
+  onBotMoved: (botId) => {
+    sendsInFlight.get(botId)?.controller.abort();
+    const state = readState();
+    const entry = botState(state, botId);
+    Object.assign(entry, { thread: null, pending: false, pendingSinceMs: null, backoffUntilMs: null });
+    writeState(state);
+  },
+  onChange: () => broadcastEvent({ type: "settings" })
+});
 
 const server = http.createServer(async (req, res) => {
   const security = validateHostAndOrigin(req);
@@ -1073,6 +1087,16 @@ const server = http.createServer(async (req, res) => {
       return handleNotifyPayload(body, res, cors);
     }
 
+    if (req.method === "GET" && pathname === "/api/settings") {
+      return sendJson(res, 200, settings.read(), cors);
+    }
+
+    const settingsAction = pathname.startsWith("/api/settings/") ? pathname.slice("/api/settings/".length) : "";
+    if (req.method === "POST" && settings.has(settingsAction)) {
+      const body = await readJsonBody(req);
+      return sendJson(res, 200, await settings.run(settingsAction, body, modelSignal(res)), cors);
+    }
+
     const transcriptMatch = /^\/api\/bot\/([^/]+)\/transcript$/.exec(pathname);
     if (req.method === "GET" && transcriptMatch) {
       const botId = decodeURIComponent(transcriptMatch[1]);
@@ -1091,25 +1115,20 @@ const server = http.createServer(async (req, res) => {
 
     if (fullPath.startsWith(PUBLIC_DIR) && fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
       const ext = path.extname(fullPath).toLowerCase();
-      const baseHeaders = {
+      // Anyone on this Mac can load these files, so the launch token is never in them.
+      res.writeHead(200, {
         "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
         "Cache-Control": "no-cache",
+        "Content-Security-Policy": PAGE_POLICY,
         ...cors
-      };
-      if (ext === ".html") {
-        const html = fs.readFileSync(fullPath, "utf8");
-        const body = injectAuthTokenIntoHtml(html);
-        res.writeHead(200, baseHeaders);
-        res.end(body);
-        return;
-      }
-      res.writeHead(200, baseHeaders);
+      });
       fs.createReadStream(fullPath).pipe(res);
       return;
     }
 
     sendJson(res, 404, { ok: false, error: "Not found" }, cors);
   } catch (err) {
+    if (err instanceof SettingsError) return sendJson(res, 200, { ok: false, error: err.message }, cors);
     console.error("[mausbot-notch] API error:", err);
     sendJson(res, 500, { ok: false, error: err.message || "Internal error" }, cors);
   }
@@ -1118,6 +1137,7 @@ const server = http.createServer(async (req, res) => {
 ensureConfigFileExists();
 
 server.listen(PORT, "127.0.0.1", () => {
+  writeLaunchAuthToken();
   console.log(`[mausbot-notch] MausBot Notch bridge listening on http://127.0.0.1:${PORT}`);
   scheduleBackgroundPoll();
 });

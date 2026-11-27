@@ -1,67 +1,31 @@
 // Runs inside the notch page (see ui-host.swift). Every press goes through the spot on screen where
 // the button is, so a button that is hidden, covered or not wired up fails.
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = [];
-const pressed = new Set();
-const $ = (sel) => document.querySelector(sel);
-const ok = (name) => log.push(`ok   - ${name}`);
-const fail = (why) => { throw new Error([...log, why, ...window.__errors].join("\n")); };
-const check = (cond, why) => { if (!cond) fail(why); };
-const until = async (cond, why) => {
-  for (let i = 0; i < 60; i++) { if (cond()) return; await sleep(50); }
-  fail(`never happened: ${why}`);
-};
-const visible = (el) => {
-  if (!el) return false;
-  const r = el.getBoundingClientRect();
-  if (!r.width || !r.height) return false;
-  const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-  return Boolean(top && (el === top || el.contains(top)));
-};
-const buttonName = (b) => b.id || b.dataset.task || b.dataset.prompt || (b.closest("#refine-chips") ? "refine" : "row-copy");
-const press = async (target, why = target) => {
-  const el = typeof target === "string" ? $(target) : target;
-  await until(() => visible(el) && !el.disabled, `${why} can be pressed`);
-  if (el.matches("button")) pressed.add(buttonName(el)); // before the click, which may replace it
-  const r = el.getBoundingClientRect();
-  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-  hit.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
-  hit.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  await sleep(30);
-};
-const key = (k) => window.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
-const native = (cmd) => window.__notchCommand(cmd);
-const sentSince = (n, type) => window.__sent.slice(n).find((m) => m.type === type);
-const copies = async (target) => {
-  const n = window.__sent.length;
-  await press(target);
-  await until(() => sentSince(n, "copyToClipboard"), `${target} copies`);
-  return sentSince(n, "copyToClipboard").text;
-};
-const notify = (botId, body) => fetch("/api/notify", {
-  method: "POST",
-  headers: { Authorization: `Bearer ${window.__MAUSBOT_NOTCH_AUTH_TOKEN}`, "Content-Type": "application/json" },
-  body: JSON.stringify({ botId, ...body })
-});
-const say = async (text) => {
-  await press("#tap-to-type-btn");
-  $("#type-input").value = text;
-  $("#type-form").requestSubmit();
-};
-const caption = () => ($("#bot-status-caption").hidden ? "" : $("#bot-status-caption").textContent);
-const collapse = async () => { native({ action: "escape" }); await until(() => $("#notch-pouch").dataset.expanded === "false", "collapses"); };
-const shot = (name) => webkit.messageHandlers.snapshot.postMessage(name);
-
 document.head.insertAdjacentHTML("beforeend", "<style>*{transition:none!important;animation:none!important}</style>");
 await until(() => $("#collapsed-name").textContent === "Ann", "the first bot's name shows");
 check(sentSince(0, "rosterLoaded"), "the bots reach the menu bar");
 check(getComputedStyle(document.documentElement).getPropertyValue("--bot-ink").trim() === "#f472b6", "the bot's color is used");
 ok("starts up");
 
+// --- Notch size and position: the closed pill fills the menu bar and hides nothing underneath ---
+const rootStyle = getComputedStyle(document.documentElement);
+const notchW = parseFloat(rootStyle.getPropertyValue("--notch-width"));
+const notchH = parseFloat(rootStyle.getPropertyValue("--notch-height"));
+const pouch = $("#notch-pouch").getBoundingClientRect();
+check(Math.abs(pouch.height - notchH) < 0.5, `the closed notch is as tall as the hardware notch (${pouch.height} vs ${notchH})`);
+check(Math.abs(pouch.top) < 0.5, "the closed notch sits flush with the top of the screen");
+check(Math.abs(pouch.left + pouch.width / 2 - window.innerWidth / 2) < 0.5, "the closed notch is centred on the screen");
+const wing = parseFloat(getComputedStyle($("#notch-pouch")).getPropertyValue("--wing-width"));
+check(Math.abs(pouch.width - (notchW + wing * 2)) < 1, "the closed notch is the hardware notch plus one wing either side");
+const notchLeft = pouch.left + (pouch.width - notchW) / 2;
+const notchRight = notchLeft + notchW;
+check($("#collapsed-name").getBoundingClientRect().right <= notchLeft + 0.5, "the bot's name stays left of the camera notch");
+check($("#collapsed-clock").getBoundingClientRect().left >= notchRight - 0.5, "the clock stays right of the camera notch");
+ok("the closed notch lines up with the hardware notch and nothing hangs below it");
+
 await press("#collapsed-bar");
-for (const sel of ["[data-task=summarize]", "[data-task=proofread]", "#rewrite-chip", "#transcript-chip"]) check(visible($(sel)), `${sel} shows when the notch opens`);
+for (const sel of ["[data-task=summarize]", "[data-task=proofread]", "#rewrite-chip", "#calendar-chip", "#transcript-chip"]) check(visible($(sel)), `${sel} shows when the notch opens`);
 await shot("1-open");
-ok("opening the notch shows Summarize, Proofread, Rewrite and Transcript");
+ok("opening the notch shows Summarize, Proofread, Rewrite, Calendar and Transcript");
 
 // --- Text tasks ---
 const runTask = async (task, canReplace) => {
@@ -97,13 +61,36 @@ await press("#rewrite-chip");
 await shot("3-rewrite");
 await press("#rewrite-back");
 check(visible($("#rewrite-chip")), "back returns to the buttons");
-for (const prompt of ["starter-concise", "starter-simple", "starter-bullets", "starter-spanish"]) {
+for (const prompt of ["starter-concise", "starter-simple", "starter-bullets", "starter-spanish", "mine", "all"]) {
   await press("#rewrite-chip");
   await press(`[data-prompt=${prompt}]`);
   await runTask("rewrite", true);
   await press("#result-close");
 }
-ok("Rewrite and its four choices");
+ok("Rewrite, its four choices and the person's own");
+
+await press("#rewrite-chip");
+check([...$("#rewrite-mine").children].map((b) => b.textContent).join() === "Tenant reply,For everyone <b>", "only this bot's and everyone's presets show");
+await press("#next-bot-btn");
+check($("#rewrite-mine").textContent.startsWith("Only Ben's"), "the other bot has its own");
+if (!visible($("#rewrite-back"))) await press("#rewrite-chip");
+await press("[data-prompt=bens]");
+await until(() => $("#result-title").textContent === "Only Ben's", "its own preset is used");
+await runTask("rewrite", true);
+await press("#result-close");
+await press("#prev-bot-btn");
+n = window.__sent.length;
+if (!visible($("#rewrite-edit"))) await press("#rewrite-chip");
+await press("#rewrite-edit");
+await until(() => sentSince(n, "openSettings")?.tab === "presets", "Edit opens the presets in Settings");
+await until(() => $("#notch-pouch").dataset.expanded === "false", "Settings closes the notch");
+await press("#collapsed-bar");
+if (visible($("#rewrite-back"))) await press("#rewrite-back");
+n = window.__sent.length;
+await press("#settings-chip");
+await until(() => sentSince(n, "openSettings")?.tab === "bots", "the gear opens Settings");
+await press("#collapsed-bar");
+ok("presets per bot, Edit and the Settings button");
 
 // --- Talking to a bot ---
 key("t");
@@ -164,22 +151,135 @@ key("Escape");
 check(visible($("#transcript-chip")), "Esc closes the transcript but not the notch");
 ok("transcript, copying, scrolling and closing");
 
+// --- Calendar ---
+const localDay = (delta) => { const d = new Date(); d.setDate(d.getDate() + delta); return d.toLocaleDateString("en-CA"); };
+const asked = () => window.__sent.findLast((m) => m.type === "calendarDay")?.date;
+const at = (h, m = 0) => new Date().setHours(h, m, 0, 0);
+check(!visible($("#calendar-view")), "the calendar is closed to begin with");
+await press("#calendar-chip");
+await until(() => asked() === localDay(0), "the calendar asks for today, in local time");
+check(visible($("#calendar-view")) && !visible($("[data-task=proofread]")) && !visible($("#tap-to-type-btn")), "the calendar takes the whole notch");
+check($("#calendar-date").textContent.startsWith("Today") && !visible($("#calendar-today")), "it is on today");
+const details = { wholeDays: false, fromMs: at(9), toMs: at(10, 30), repeats: "", location: "", notes: "", organizer: "", people: [], link: null };
+native({ action: "calendarDay", date: localDay(0), status: "ok", events: [
+  { ...details, id: "holiday", wholeDays: true, fromMs: at(0), toMs: at(23, 59), title: "Holiday", calendar: "US Holidays", color: "#ff0000", allDay: true, startMs: at(0), endMs: null },
+  { ...details, id: "overnight", fromMs: at(9) - 864e5, link: { join: false, label: "example.com" }, title: "Overnight", calendar: "Work", color: "#00ff00", allDay: false, startMs: null, endMs: at(6) },
+  { ...details, id: "call", repeats: "Every week", location: "Room 4", organizer: "Ann", link: { join: true, label: "Zoom" },
+    people: [{ name: "Jose", reply: "Going", me: true }, { name: "Ben", reply: "", me: false }],
+    notes: "Agenda:<br>Leases &amp; pool<script>__errors.push('script')</script><img src=x onerror=__errors.push('notes')>", title: "<img src=x onerror=__errors.push('injected')>", calendar: "Work", color: "#00ff00", allDay: false, startMs: at(9), endMs: at(10, 30) }
+] });
+await until(() => document.querySelectorAll(".calendar-event").length === 3, "the day's events are listed");
+check([...document.querySelectorAll(".calendar-event")].every(visible), "every event can be seen");
+const times = [...document.querySelectorAll(".calendar-event-time")].map((t) => t.textContent);
+check(times[0] === "All day" && /^Until 6:00/.test(times[1]) && /^9:00.* – 10:30/.test(times[2]), `event times (${times})`);
+check(!$("#calendar-list img"), "event text is never treated as HTML");
+await shot("5b-calendar");
+check(document.querySelectorAll(".calendar-event-join").length === 1, "only the event with a meeting offers Join");
+n = window.__sent.length;
+await press(".calendar-event-join");
+check(sentSince(n, "openEventLink")?.id === "call", "Join on a row opens that event's meeting");
+check($("#event-detail").hidden, "Join doesn't open the details");
+const row = (i) => document.querySelectorAll(".calendar-event-open")[i];
+await press(row(2), "the call");
+check(visible($("#event-detail")) && !visible($("#calendar-list")) && !visible($("#calendar-prev")), "clicking an event shows its details");
+const shownText = $("#event-detail").textContent;
+for (const text of ["Every week", "Room 4", "Ann", "Jose (you) · Going\nBen", "Agenda:\nLeases & pool", "10:30"]) check(shownText.includes(text), `details show ${text} (${shownText})`);
+check(!$("#event-detail img") && !shownText.includes("script"), "invitation HTML is shown as text only");
+await shot("5d-event");
+n = window.__sent.length;
+check($("#event-open-link").textContent === "Join on Zoom", "the meeting service is named");
+await press("#event-open-link");
+check(sentSince(n, "openEventLink")?.id === "call" && !("url" in sentSince(n, "openEventLink")), "the page names the event, never an address");
+native({ action: "eventLinkFailed", id: "call" });
+check($("#event-detail").textContent.startsWith("Couldn't open the link"), "a link that won't open says so");
+native({ action: "nextBot" });
+check(visible($("#event-detail")), "→ does nothing in an event");
+await press("#event-back");
+check(visible($("#calendar-list")) && visible($("#calendar-prev")) && $("#calendar-date").textContent.startsWith("Today"), "Back returns to the day");
+await press(row(1), "the overnight event");
+check($("#event-open-link").textContent === "Open example.com" && !$("#event-detail").textContent.includes("Couldn't"), "another link shows where it goes");
+key("Escape");
+check(visible($("#calendar-list")), "Esc returns to the day");
+await press(row(0), "the holiday");
+check(!visible($("#event-open-link")) && $("#event-detail").textContent.includes("All day"), "an event without a link has no button");
+native({ action: "prevBot" });
+check(visible($("#calendar-list")) && asked() === localDay(0), "← returns to the same day");
+native({ action: "collapse" });
+check($("#notch-pouch").dataset.expanded === "false", "opening a link closes the notch");
+await press("#collapsed-bar");
+if (!visible($("#calendar-view"))) await press("#calendar-chip");
+ok("events: details, Join, links, Back, Esc and ←");
+await press("#calendar-next");
+await until(() => asked() === localDay(1) && $("#calendar-date").textContent.startsWith("Tomorrow"), "› shows tomorrow");
+native({ action: "calendarDay", date: localDay(0), status: "ok", events: [{ title: "Late", calendar: "", color: "#000", allDay: true }] });
+check(!$(".calendar-event"), "a late answer for another day is dropped");
+native({ action: "calendarDay", date: localDay(1), status: "ok", events: [] });
+await until(() => $("#calendar-list").textContent === "Nothing on this day.", "an empty day says so");
+await press("#calendar-prev");
+native({ action: "prevBot" });
+await until(() => asked() === localDay(-1) && $("#calendar-date").textContent.startsWith("Yesterday"), "‹ and ← go back a day");
+check($("#collapsed-name").textContent === "Ann", "← doesn't change the bot behind the calendar");
+key("x");
+check($("#type-form").hidden, "typing does nothing in the calendar");
+await press("#calendar-today");
+await until(() => asked() === localDay(0), "Today goes back to today");
+native({ action: "calendarDay", date: localDay(0), status: "denied" });
+await press("#calendar-privacy");
+check(sentSince(0, "openCalendarPrivacy"), "without permission it offers System Settings");
+await shot("5c-calendar-denied");
+native({ action: "calendarDay", date: localDay(0), status: "error", error: "Calendar is broken." });
+check($("#calendar-list").textContent === "Calendar is broken." && !visible($("#calendar-privacy")), "an error is shown");
+await press("#calendar-close");
+check(visible($("[data-task=proofread]")), "closing the calendar brings the buttons back");
+await press("#calendar-chip");
+key("Escape");
+check(visible($("#calendar-chip")) && !visible($("#calendar-view")), "Esc closes the calendar but not the notch");
+ok("calendar: events, days, permission, errors and closing");
+
 // --- Unread ---
 await collapse();
 await notify("a", { text: "Rent is paid for Egger." });
-await until(() => $("#notch-pouch").dataset.expanded === "true" && caption() === "Rent is paid for Egger.", "a reply opens the notch");
-native({ action: "toggleExpand" });
-await until(() => visible($("#collapsed-unread")), "an untouched reply stays unread");
+await until(() => visible($("#collapsed-unread")), "a reply shows as unread");
+await sleep(300);
+check($("#notch-pouch").dataset.expanded === "false", "a reply leaves the notch closed");
+check($("#notch-pouch").dataset.peek === "true", "a reply is previewed");
 check($("#collapsed-unread").textContent === "1" && $("#collapsed-preview").textContent === "Rent is paid for Egger.", "count and preview");
 await notify("b", { text: "Pool is at 84." });
-await until(() => $("#collapsed-others").children.length === 1, "another bot's reply shows as its dot");
-await shot("6-unread");
+await until(() => $("#collapsed-name").textContent === "Ben" && $("#collapsed-preview").textContent === "Pool is at 84.", "another bot's reply is previewed under its name");
+check($("#collapsed-others").children.length === 1, "the first bot's unread reply shows as its dot");
+await shot("6-preview");
+await sleep(7300);
+check($("#collapsed-name").textContent === "Ann" && $("#notch-pouch").dataset.peek === "false", "the preview gives way to the selected bot");
+check($("#collapsed-others").children.length === 1 && visible($("#collapsed-unread")), "its count and the other bot's dot stay");
+await shot("7-unread");
 await press("#collapsed-bar");
 await until(() => caption() === "Rent is paid for Egger." && $("#collapsed-unread").hidden, "opening shows the reply and marks it read");
 await press("#next-bot-btn");
 await until(() => caption() === "Pool is at 84." && $("#collapsed-others").children.length === 0, "the other bot's reply shows and is marked read");
 await collapse();
 check(!visible($("#collapsed-unread")), "nothing left unread");
+check($("#collapsed-name").textContent === "Ben", "Ben is selected");
+await notify("a", { text: "Lease is signed." });
+await until(() => $("#collapsed-name").textContent === "Ann", "a reply from the bot that isn't selected is previewed too");
+await press("#collapsed-bar");
+await until(() => caption() === "Lease is signed." && $("#collapsed-name").textContent === "Ann", "opening a preview opens its bot");
+await collapse();
+check(!visible($("#collapsed-unread")), "a previewed reply that was opened is read");
+const preference = (body) => fetch("/api/settings/preferences", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${window.__MAUSBOT_NOTCH_AUTH_TOKEN}`, "Content-Type": "application/json" },
+  body: JSON.stringify(body)
+});
+await preference({ openOnReply: true });
+await sleep(300);
+await notify("a", { text: "Opens by itself." });
+await until(() => $("#notch-pouch").dataset.expanded === "true" && caption() === "Opens by itself.", "a reply opens the notch when Settings says so");
+check(window.__sent.findLast((m) => m.type === "hitRect").isPassive, "and doesn't take the keyboard");
+native({ action: "toggleExpand" });
+await until(() => visible($("#collapsed-unread")), "an untouched reply stays unread");
+await press("#collapsed-bar");
+await collapse();
+await preference({ openOnReply: false });
 ok("unread count, preview and marking read, per bot");
 
 // --- Double-command draft still works on top of all this ---

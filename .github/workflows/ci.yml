@@ -16,7 +16,7 @@ jobs:
           node-version: 20
 
       - name: Syntax-check local bridge
-        run: node --check server.mjs
+        run: for f in server.mjs settings.mjs public/app.js public/settings.js; do node --input-type=module --check < "$f"; done
 
       - name: Build app (native arch)
         run: bash scripts/build-mac-app.sh
@@ -33,5 +33,5 @@ jobs:
       - name: Screen tests (presses every button)
         run: node scripts/ui-test.mjs
 
-      - name: Draft destination tests
+      - name: Draft destination and shortcut tests
         run: bash scripts/swift-test.sh

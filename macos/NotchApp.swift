@@ -50,6 +50,13 @@ private func carbonHotKeyHandler(
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    // By default macOS keeps every window inside the visible frame, i.e. below the
+    // menu bar and the hardware notch. That pushed the notch ~33 pt down so it hung
+    // under the Mac's own notch. This panel is meant to sit flush with the top edge.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        return frameRect
+    }
 }
 
 // MARK: - Transparent WebView with First-Click Acceptance
@@ -68,9 +75,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var launchAuthToken: String?
 
     private let bridgePort = 4799
+    private lazy var notchPagesOnly = BridgePagesOnly(port: bridgePort)
+    private lazy var settingsWindow = SettingsWindow(
+        port: bridgePort,
+        answer: { [weak self] in self?.answerSettings($0) ?? [:] },
+        didBecomeKey: { [weak self] in self?.sendCommandToWeb(["action": "collapse"]) },
+        didClose: { [weak self] in self?.endHotKeyRecording() }
+    )
+    private var hotKey = HotKey.standard
+    private var doubleCommandEnabled = true
     // Kai OS's notch canvas: its biggest shape (560×480, KaiNotchLayout.expandedSize) plus slack.
     private let panelWidth: CGFloat = 700
     private let panelHeight: CGFloat = 570
+    // Collapsed pill: 24 px padding on each side, height for mark + name + breathing room.
     private var hitRectInPanel = NSRect(x: 94, y: 0, width: 212, height: 56)
     private var isNotchOpen = false
     /// Open and meant to have the keyboard. False while a bot's reply is only being shown.
@@ -114,6 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         sharedAppDelegate = self
         NSApp.setActivationPolicy(.accessory)
 
+        loadPreferences()
+        setupMainMenu()
         registerCarbonGlobalHotKeys()
         requestAccessibilityIfNeeded()
         ScreenContext.startTrackingFrontmostApp()
@@ -144,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let hk1 = toggleHotKeyRef { UnregisterEventHotKey(hk1) }
+        unregisterToggleHotKey()
         updateExpandedNavigationHotKeys(active: false, includeArrows: false)
         if let proc = serverProcess, proc.isRunning {
             proc.terminate()
@@ -215,16 +234,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             nil
         )
 
-        // HotKey 1: Option + Space -> Toggle Notch Expand/Collapse
-        let hkID1 = EventHotKeyID(signature: OSType(0x4D424E31), id: 1)
-        RegisterEventHotKey(
-            UInt32(kVK_Space),
-            UInt32(optionKey),
-            hkID1,
-            GetApplicationEventTarget(),
-            0,
-            &toggleHotKeyRef
-        )
+        if !registerToggleHotKey(hotKey) {
+            NSLog("[MausBotNotch] macOS refused the shortcut \(hotKey.label). Pick another in Settings.")
+        }
+    }
+
+    // HotKey 1: opens and closes the notch
+    private func registerToggleHotKey(_ key: HotKey) -> Bool {
+        unregisterToggleHotKey()
+        let id = EventHotKeyID(signature: OSType(0x4D424E31), id: 1)
+        return RegisterEventHotKey(key.keyCode, key.modifiers, id, GetApplicationEventTarget(), 0, &toggleHotKeyRef) == noErr
+    }
+
+    private func unregisterToggleHotKey() {
+        if let ref = toggleHotKeyRef { UnregisterEventHotKey(ref) }
+        toggleHotKeyRef = nil
+    }
+
+    // MARK: - Settings
+    private func loadPreferences() {
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/MausBot Notch/config.json")
+        guard let data = try? Data(contentsOf: file),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        hotKey = (config["hotkey"] as? String).flatMap(HotKey.init) ?? .standard
+        doubleCommandEnabled = (config["doubleCommand"] as? Bool) ?? true
+    }
+
+    /// The Settings page changes what only the app can change. It saves the choice through the bridge.
+    private func answerSettings(_ message: [String: Any]) -> [String: Any] {
+        switch message["type"] as? String {
+        case "beginRecording":
+            unregisterToggleHotKey() // so pressing the current shortcut records it instead
+        case "endRecording":
+            endHotKeyRecording()
+        case "setHotkey":
+            guard let key = (message["hotkey"] as? String).flatMap(HotKey.init) else {
+                endHotKeyRecording()
+                return ["ok": false, "error": "That shortcut can't be used."]
+            }
+            guard !key.isUsedByMacOS else {
+                endHotKeyRecording()
+                return ["ok": false, "error": "macOS already uses \(key.label). Pick another, or turn it off in System Settings → Keyboard."]
+            }
+            guard registerToggleHotKey(key) else {
+                endHotKeyRecording()
+                return ["ok": false, "error": "macOS refused \(key.label). Pick another."]
+            }
+            hotKey = key
+            rebuildStatusMenu()
+        case "setDoubleCommand":
+            doubleCommandEnabled = (message["on"] as? Bool) ?? true
+        default:
+            return ["ok": false, "error": "Unknown setting."]
+        }
+        return ["ok": true]
+    }
+
+    private func endHotKeyRecording() {
+        _ = registerToggleHotKey(hotKey)
+    }
+
+    @objc private func openSettingsFromMenu() {
+        settingsWindow.show(tab: nil, tokenScript: launchTokenScript())
+    }
+
+    /// Never shown (the app has no menu bar of its own), but without it ⌘C, ⌘V and ⌘W do nothing in
+    /// its windows. No ⌘Q: pressed in the notch, it would quit what the user meant to close.
+    private func setupMainMenu() {
+        let app = NSMenu()
+        app.addItem(withTitle: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",").target = self
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let window = NSMenu(title: "Window")
+        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let main = NSMenu()
+        for submenu in [app, edit, window] {
+            let item = NSMenuItem()
+            item.submenu = submenu
+            main.addItem(item)
+        }
+        NSApp.mainMenu = main
     }
 
     // MARK: - Node Server Management
@@ -346,12 +441,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             NSLog("[MausBotNotch] Failed to start server.mjs: \(error)")
         }
 
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.55) { [weak self] in
-            if self?.resolveLaunchAuthToken() == nil {
-                self?.launchAuthToken = self?.readLaunchAuthTokenFromDisk()
+        waitForBridge(attemptsLeft: 25, completion: completion)
+    }
+
+    /// The pages get the token from here only, so it has to be the one the bridge answers to.
+    private func waitForBridge(attemptsLeft: Int, completion: @escaping () -> Void) {
+        bootstrapHealthCheck(token: launchAuthToken) { [weak self] healthy in
+            guard let self, !healthy, attemptsLeft > 0 else {
+                completion()
+                return
             }
-            completion()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                // The port was taken: an earlier bridge is still running, with its own token.
+                if self.serverProcess?.isRunning != true, let token = self.readLaunchAuthTokenFromDisk() {
+                    self.launchAuthToken = token
+                }
+                self.waitForBridge(attemptsLeft: attemptsLeft - 1, completion: completion)
+            }
         }
+    }
+
+    private func launchTokenScript() -> WKUserScript? {
+        guard let token = resolveLaunchAuthToken() else { return nil }
+        let escaped = token
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return WKUserScript(source: "window.__MAUSBOT_NOTCH_AUTH_TOKEN='\(escaped)';", injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }
 
     // MARK: - Main Screen & Hardware Notch Detection
@@ -364,23 +479,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return NSScreen.screens.first ?? NSScreen.main
     }
 
-    private func detectHardwareNotchGeometry(for screen: NSScreen) -> (width: CGFloat, height: CGFloat) {
+    /// The notch's rect in screen coordinates (origin bottom left). The panel is centred on this,
+    /// not on the screen, so a notch that is not perfectly centred still lines up.
+    private func notchRect(for screen: NSScreen) -> NSRect {
         if #available(macOS 12.0, *) {
             if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-                let gap = screen.frame.width - left.width - right.width
-                let h = max(32, screen.safeAreaInsets.top)
-                if gap > 100 && gap < 320 {
-                    return (gap, h)
+                let width = screen.frame.width - left.width - right.width
+                if width > 100 && width < 320 {
+                    let height = max(1, screen.safeAreaInsets.top)
+                    return NSRect(
+                        x: screen.frame.minX + left.width,
+                        y: screen.frame.maxY - height,
+                        width: width,
+                        height: height
+                    )
                 }
             }
         }
-        return (185, 32)
+        // No hardware notch: a pill in the middle of the menu bar.
+        let menuBarHeight = max(20, screen.frame.maxY - screen.visibleFrame.maxY)
+        return NSRect(
+            x: screen.frame.midX - 92.5,
+            y: screen.frame.maxY - menuBarHeight,
+            width: 185,
+            height: menuBarHeight
+        )
+    }
+
+    private func notchCenterX(for screen: NSScreen) -> CGFloat {
+        notchRect(for: screen).midX
+    }
+
+    private func sendNotchGeometryToWeb() {
+        guard let screen = primaryMacScreen() else { return }
+        let notch = notchRect(for: screen)
+        sendCommandToWeb([
+            "action": "setNotchGeometry",
+            "notchWidth": Int(notch.width.rounded()),
+            "notchHeight": Int(notch.height.rounded())
+        ])
     }
 
     private func setupNotchPanel() {
         guard let screen = primaryMacScreen() else { return }
+        // Panel sits directly under the notch: top edge at frame.maxY (top of screen),
+        // extending down. Notch (safeAreaInsets.top) sits on top of the panel area.
         let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
+            x: notchCenterX(for: screen) - panelWidth / 2,
             y: screen.frame.maxY - panelHeight,
             width: panelWidth,
             height: panelHeight
@@ -404,17 +549,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let config = WKWebViewConfiguration()
         config.userContentController.add(self, name: "notchHost")
 
-        if let token = resolveLaunchAuthToken() {
-            let escaped = token
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let scriptSource = "window.__MAUSBOT_NOTCH_AUTH_TOKEN='\(escaped)';"
-            let userScript = WKUserScript(source: scriptSource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-            config.userContentController.addUserScript(userScript)
-        }
+        if let script = launchTokenScript() { config.userContentController.addUserScript(script) }
 
         webView = NotchWebView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight), configuration: config)
         webView.uiDelegate = self
+        webView.navigationDelegate = notchPagesOnly
         webView.setValue(false, forKey: "drawsBackground")
         webView.allowsMagnification = false
 
@@ -425,20 +564,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             webView.load(URLRequest(url: url))
         }
 
-        let notchGeo = detectHardwareNotchGeometry(for: screen)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            self?.sendCommandToWeb([
-                "action": "setNotchGeometry",
-                "notchWidth": Int(notchGeo.width),
-                "notchHeight": Int(notchGeo.height)
-            ])
+            self?.sendNotchGeometryToWeb()
         }
     }
 
     @objc private func repositionNotchPanel() {
         guard let screen = primaryMacScreen(), let panel = panel else { return }
         let frame = NSRect(
-            x: screen.frame.midX - panelWidth / 2,
+            x: notchCenterX(for: screen) - panelWidth / 2,
             y: screen.frame.maxY - panelHeight,
             width: panelWidth,
             height: panelHeight
@@ -515,6 +649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     private func handleCommandEvent(_ event: NSEvent) {
+        guard doubleCommandEnabled else { return }
         guard event.type == .flagsChanged, let mask = Self.commandKeyMasks[event.keyCode] else {
             // Any other key or modifier breaks the sequence.
             commandPressedAt = nil
@@ -740,7 +875,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private func rebuildStatusMenu() {
         let menu = NSMenu()
 
-        let toggleItem = NSMenuItem(title: "Toggle MausBot Notch (⌥Space)", action: #selector(toggleNotchExpand), keyEquivalent: "")
+        let toggleItem = NSMenuItem(title: "Toggle MausBot Notch (\(hotKey.label))", action: #selector(toggleNotchExpand), keyEquivalent: "")
         menu.addItem(toggleItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -760,6 +895,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             menu.addItem(NSMenuItem.separator())
         }
 
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        menu.addItem(settingsItem)
+
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
         menu.addItem(loginItem)
@@ -773,6 +911,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     @objc func toggleNotchExpand() {
+        guard panel != nil else { return } // pressed while the bridge is still starting
         repositionNotchPanel()
         panel.ignoresMouseEvents = false
         NSApp.activate(ignoringOtherApps: true)
@@ -842,7 +981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let wasActive = isNotchActive
             isNotchOpen = (body["isOpen"] as? Bool) ?? false
             // A notch that opened by itself (a bot replied) never takes the keyboard or the arrow
-            // and Esc keys from the app the user is typing in, until they click it or press ⌥Space.
+            // and Esc keys from the app the user is typing in, until they click it or press the shortcut.
             isNotchActive = isNotchOpen && !((body["isPassive"] as? Bool) ?? false)
             isTypingInNotch = (body["isTyping"] as? Bool) ?? false
 
@@ -863,6 +1002,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             updateStatusItemAppearance()
             rebuildStatusMenu()
+
+        case "requestNotchGeometry":
+            sendNotchGeometryToWeb()
 
         case "rosterLoaded":
             if let bots = body["bots"] as? [[String: String]] {
@@ -888,6 +1030,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             if let text = body["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 replaceFocusedText(text)
             }
+
+        case "calendarDay":
+            if let date = body["date"] as? String {
+                Task { @MainActor [weak self] in
+                    var answer = await CalendarEvents.answer(for: date)
+                    answer["action"] = "calendarDay"
+                    self?.sendCommandToWeb(answer)
+                }
+            }
+
+        case "openEventLink":
+            if let id = body["id"] as? String {
+                let opened = CalendarEvents.link(for: id).map { NSWorkspace.shared.open($0) } ?? false
+                sendCommandToWeb(opened ? ["action": "collapse"] : ["action": "eventLinkFailed", "id": id])
+            }
+
+        case "openCalendarPrivacy":
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                NSWorkspace.shared.open(url)
+            }
+
+        case "openSettings":
+            settingsWindow.show(tab: body["tab"] as? String, tokenScript: launchTokenScript())
 
         case "copyToClipboard":
             if let text = body["text"] as? String, !text.isEmpty {

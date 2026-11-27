@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MausBot Notch Settings</title>
+    <link rel="stylesheet" href="/settings.css" />
+  </head>
+  <body>
+    <nav id="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="bots">Bots</button>
+      <button type="button" role="tab" data-tab="model">Model</button>
+      <button type="button" role="tab" data-tab="presets">Presets</button>
+      <button type="button" role="tab" data-tab="general">General</button>
+    </nav>
+
+    <main>
+      <p id="load-error" class="message error" hidden></p>
+
+      <section data-panel="bots" hidden>
+        <div id="bot-list" class="list"></div>
+        <button id="bot-add" type="button">Add a bot</button>
+        <form id="bot-form" class="card" autocomplete="off" hidden>
+          <h2 id="bot-form-title"></h2>
+          <p id="bot-paste-hint" class="hint">In OpenMausBot, open the bot's settings → Advanced: Access → Bot API. Paste the whole command from that card into any box here to fill in the address, id and key.</p>
+          <label>Name <input name="name" maxlength="40" spellcheck="false" /></label>
+          <label>Address <input name="baseUrl" maxlength="500" placeholder="https://your-instance.example.com" spellcheck="false" /></label>
+          <label>Bot id <input name="id" maxlength="100" spellcheck="false" /></label>
+          <label>Key <input name="key" type="password" maxlength="500" autocomplete="off" /></label>
+          <label>Color <select name="color"></select></label>
+          <p class="message" role="status"></p>
+          <div class="actions">
+            <button id="bot-save" type="submit" class="primary">Save</button>
+            <button id="bot-test" type="button">Test key</button>
+            <button id="bot-cancel" type="button">Cancel</button>
+            <button id="bot-remove" type="button" class="danger">Remove</button>
+          </div>
+        </form>
+      </section>
+
+      <section data-panel="model" hidden>
+        <form id="model-form" class="card" autocomplete="off">
+          <p class="hint">Writes the double-⌘ replies, summaries, proofreading and rewrites. It runs on this Mac, so your text stays here.</p>
+          <label>Server
+            <select name="kind">
+              <option value="ollama">Ollama</option>
+              <option value="openai">MTPLX, LM Studio, llama.cpp (OpenAI-compatible)</option>
+            </select>
+          </label>
+          <label>Address <input name="url" list="model-addresses" maxlength="500" spellcheck="false" /></label>
+          <datalist id="model-addresses"></datalist>
+          <label>Model <input name="model" list="model-names" maxlength="200" placeholder="Automatic" spellcheck="false" /></label>
+          <datalist id="model-names"></datalist>
+          <div id="model-choices" class="choices"></div>
+          <p class="message" role="status"></p>
+          <div class="actions">
+            <button id="model-save" type="submit" class="primary">Save</button>
+            <button id="model-list" type="button">Find models</button>
+            <button id="model-test" type="button">Test</button>
+          </div>
+        </form>
+      </section>
+
+      <section data-panel="presets" hidden>
+        <p class="hint">Your own choices under Rewrite ▾, after the built-in ones. A preset can belong to one bot or show for all of them.</p>
+        <div id="preset-list" class="list"></div>
+        <button id="preset-add" type="button">Add a preset</button>
+        <form id="preset-form" class="card" autocomplete="off" hidden>
+          <h2 id="preset-form-title"></h2>
+          <label>Name <input name="name" maxlength="40" placeholder="Tenant reply" /></label>
+          <label>Instruction <textarea name="instruction" rows="5" maxlength="2000" placeholder="Rewrite the text as a short, friendly message to a tenant. Keep every date and amount."></textarea></label>
+          <label>Shows for <select name="botId"></select></label>
+          <p class="message" role="status"></p>
+          <div class="actions">
+            <button id="preset-save" type="submit" class="primary">Save</button>
+            <button id="preset-cancel" type="button">Cancel</button>
+            <button id="preset-remove" type="button" class="danger">Remove</button>
+          </div>
+        </form>
+      </section>
+
+      <section data-panel="general" hidden>
+        <div class="card">
+          <div class="row">
+            <span>Open or close the notch</span>
+            <kbd id="hotkey-label"></kbd>
+            <button id="hotkey-record" type="button">Change</button>
+            <button id="hotkey-reset" type="button">Reset</button>
+          </div>
+          <label class="check"><input id="double-command" type="checkbox" /> <span>Double-tap ⌘ drafts a reply to what's on screen</span></label>
+          <label class="check"><input id="open-on-reply" type="checkbox" /> <span>Open the notch when the selected bot replies<small>Off: the closed notch shows a preview and a count.</small></span></label>
+          <p id="general-message" class="message" role="status"></p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/settings.js"></script>
+  </body>
+</html>

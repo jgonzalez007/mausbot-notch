@@ -13,7 +13,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/app"
 
 cp "$ROOT_DIR/macos/Info.plist" "$CONTENTS_DIR/Info.plist"
 
-cp "$ROOT_DIR/server.mjs" "$RESOURCES_DIR/app/server.mjs"
+cp "$ROOT_DIR/server.mjs" "$ROOT_DIR/settings.mjs" "$RESOURCES_DIR/app/"
 cp "$ROOT_DIR/package.json" "$RESOURCES_DIR/app/package.json"
 cp -R "$ROOT_DIR/public" "$RESOURCES_DIR/app/public"
 
@@ -25,10 +25,11 @@ swiftc -O \
   -framework Cocoa \
   -framework WebKit \
   -framework Carbon \
+  -framework EventKit \
   -framework ApplicationServices \
   -framework Vision \
   -framework ScreenCaptureKit \
-  "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/NotchApp.swift" \
+  "$ROOT_DIR/macos/CalendarEvents.swift" "$ROOT_DIR/macos/DraftSpot.swift" "$ROOT_DIR/macos/HotKey.swift" "$ROOT_DIR/macos/SettingsWindow.swift" "$ROOT_DIR/macos/NotchApp.swift" \
   -o "$MACOS_DIR/MausBotNotch"
 
 # Auto-detect Developer ID / Apple Development certificate, or fall back to ad-hoc signing

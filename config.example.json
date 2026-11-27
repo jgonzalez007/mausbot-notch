@@ -1,14 +1,10 @@
 {
   "notifyToken": "",
   "pollIntervalSec": 20,
+  "bots": [],
   "reply": { "ollamaUrl": "http://127.0.0.1:11434", "model": "" },
-  "bots": [
-    {
-      "name": "MausBot",
-      "id": "9ac3bee9-9803-450e-aa74-2c50453417ff",
-      "key": "YOUR_BOT_API_KEY",
-      "baseUrl": "https://your-instance.example.com",
-      "color": "cyan"
-    }
-  ]
+  "presets": [],
+  "hotkey": "Option+Space",
+  "doubleCommand": true,
+  "openOnReply": false
 }

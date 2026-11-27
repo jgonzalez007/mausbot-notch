@@ -24,14 +24,18 @@ function postNativeMessage(payload) {
 // state.status: "idle" | "sending" | "working" | "needs_approval" | "error"
 const state = {
   expanded: false,
-  passive: false, // open because a bot replied: shown without taking the keyboard
+  passive: false, // opened by itself: shown without taking the keyboard
+  openOnReply: false, // Settings: open the notch for a reply instead of only previewing it
+  peekBotId: null, // the bot whose new reply the closed notch is previewing
   typing: false,
   bots: [],
   selectedBotId: null,
   status: "idle",
   statusCaption: "",
-  view: "default", // "default" | "transcript"
+  view: "default", // "default" | "transcript" | "calendar"
   transcript: { botId: null, entries: [] },
+  // date is a local "YYYY-MM-DD"; openId is the event whose details are showing; linkError is about that event's link
+  calendar: { date: "", status: "loading", events: [], error: "", openId: null, linkError: "" },
   sends: {} // bot id -> when the message being sent was sent (ms); also identifies that send
 };
 
@@ -49,6 +53,18 @@ const dom = {
   transcriptView: document.getElementById("transcript-view"),
   transcriptList: document.getElementById("transcript-list"),
   transcriptCopy: document.getElementById("transcript-copy"),
+  calendarChip: document.getElementById("calendar-chip"),
+  calendarView: document.getElementById("calendar-view"),
+  calendarPrev: document.getElementById("calendar-prev"),
+  calendarDate: document.getElementById("calendar-date"),
+  calendarNext: document.getElementById("calendar-next"),
+  calendarToday: document.getElementById("calendar-today"),
+  calendarClose: document.getElementById("calendar-close"),
+  calendarList: document.getElementById("calendar-list"),
+  calendarPrivacy: document.getElementById("calendar-privacy"),
+  eventBack: document.getElementById("event-back"),
+  eventDetail: document.getElementById("event-detail"),
+  eventOpenLink: document.getElementById("event-open-link"),
   transcriptClose: document.getElementById("transcript-close"),
   botTitleBlock: document.getElementById("bot-title-block"),
   botNameLabel: document.getElementById("bot-name-label"),
@@ -62,6 +78,10 @@ const dom = {
   rewriteChip: document.getElementById("rewrite-chip"),
   rewriteMenu: document.getElementById("rewrite-menu"),
   rewriteBack: document.getElementById("rewrite-back"),
+  rewriteMine: document.getElementById("rewrite-mine"),
+  rewriteEdit: document.getElementById("rewrite-edit"),
+  settingsChip: document.getElementById("settings-chip"),
+  collapsedMark: document.getElementById("collapsed-mark"),
   resultView: document.getElementById("result-view"),
   resultTitle: document.getElementById("result-title"),
   resultText: document.getElementById("result-text"),
@@ -70,7 +90,8 @@ const dom = {
   resultClose: document.getElementById("result-close"),
   resultReplace: document.getElementById("result-replace"),
   refineChips: document.getElementById("refine-chips"),
-  resultFooter: document.getElementById("result-footer")
+  resultFooter: document.getElementById("result-footer"),
+  collapsedClock: document.getElementById("collapsed-clock")
 };
 
 function findBot(botId) {
@@ -95,6 +116,10 @@ const BOT_COLORS = {
   yellow: "#facc15"
 };
 const DEFAULT_BOT_COLOR = "#5b8dee";
+
+function botColor(bot) {
+  return BOT_COLORS[bot?.color] || DEFAULT_BOT_COLOR;
+}
 
 // ============================================================================
 // NATIVE HIT-RECT SYNC
@@ -129,6 +154,7 @@ function setExpanded(expanded, { passive = false } = {}) {
   state.passive = next && passive;
   dom.pouch.dataset.expanded = String(next);
   if (next) {
+    endPeek();
     refreshBootstrap();
     showDeferredReply();
     showUnread();
@@ -136,7 +162,7 @@ function setExpanded(expanded, { passive = false } = {}) {
     setTypingMode(false);
     closeResult();
     showRewriteMenu(false);
-    closeTranscript();
+    closeView();
   }
   reportHitRectToNative();
   let steps = 0;
@@ -182,25 +208,27 @@ function renderPouch() {
   dom.pouch.dataset.result = state.result && state.expanded ? "true" : "false";
   renderResult();
   renderTranscript();
+  renderCalendar();
   renderStopArea();
-  renderUnread();
   if (!bot) {
-    dom.botNameLabel.textContent = "No bots configured";
+    dom.botNameLabel.textContent = "No bots yet. Add one in Settings.";
     dom.botNameLabel.hidden = false;
-    dom.collapsedName.textContent = "MausBot Notch";
+    renderUnread();
     dom.botStatusCaption.hidden = true;
     dom.pouch.dataset.status = "idle";
     document.documentElement.style.setProperty("--bot-ink", DEFAULT_BOT_COLOR);
+    renderRewriteMenu();
     reportHitRectToNative();
     return;
   }
 
-  document.documentElement.style.setProperty("--bot-ink", BOT_COLORS[bot.color] || DEFAULT_BOT_COLOR);
+  document.documentElement.style.setProperty("--bot-ink", botColor(bot));
   dom.pouch.dataset.status = state.status;
   // A double-⌘ draft needs room to be read, so the pouch grows while one is showing.
   dom.pouch.dataset.draft = state.copyText && state.expanded ? "true" : "false";
 
-  dom.collapsedName.textContent = bot.name;
+  renderUnread();
+  renderRewriteMenu();
   dom.botNameLabel.textContent = bot.name;
   // The identity bar at the top already shows the name; don't repeat it in the middle.
   dom.botNameLabel.hidden = true;
@@ -253,7 +281,7 @@ let activeReplyPoll = null;
 // INBOUND EVENTS: server-sent events from the local bridge.
 // The bridge polls pending bot threads in the background and (once the Bot API
 // grows a push channel) relays /api/notify events, so replies that land while
-// the notch is collapsed or closed still pop the notch and surface.
+// the notch is collapsed or closed show on it as a preview and a count.
 // ============================================================================
 let eventSource = null;
 
@@ -289,20 +317,18 @@ function handleServerEvent(evt) {
   const draftToRead = state.copyText && state.expanded;
   if (isCurrent && (state.result || state.drafting || draftToRead)) {
     if (evt.type === "reply") state.deferredReplyBotId = evt.botId;
-    if (evt.type === "reply" || evt.type === "hello") refreshBootstrap();
+    if (evt.type !== "status" && evt.type !== "timeout") refreshBootstrap();
     return;
   }
 
   if (evt.type === "reply") {
     if (isCurrent) {
       state.copyText = ""; // the caption becomes the reply, so a click must not copy an old draft
-      // Pop the notch and pull the latest transcript so the caption updates.
-      // It must not take the keyboard from whatever the user is typing in.
-      if (!state.expanded) setExpanded(true, { passive: true });
+      // Opening by itself must not take the keyboard from whatever the user is typing in.
+      if (state.openOnReply && !state.expanded) setExpanded(true, { passive: true });
       pollTranscriptOnce(evt.botId);
     }
-    // Replies for other bots are kept in state.json; they show when you
-    // cycle to that bot and the notch polls its transcript.
+    // The unread count goes up, which previews the reply on a closed notch (noteUnread).
     refreshBootstrap();
   } else if (evt.type === "status" && isCurrent) {
     state.status = evt.status;
@@ -314,7 +340,7 @@ function handleServerEvent(evt) {
       state.statusCaption = "";
       renderPouch();
     }
-  } else if (evt.type === "hello") {
+  } else if (evt.type === "hello" || evt.type === "settings") {
     refreshBootstrap();
   }
 }
@@ -423,8 +449,10 @@ async function pollTranscriptOnce(botId) {
     const last = res.entries[res.entries.length - 1];
     const bot = findBot(botId);
     if (bot) {
+      const before = bot.unreadCount || 0;
       bot.unreadCount = res.entries.filter((e) => e.unread).length;
-      bot.lastReplyPreview = res.entries.findLast((e) => e.role === "assistant")?.text.slice(0, 80) || "";
+      bot.lastReplyPreview = res.entries.findLast((e) => e.role === "assistant")?.text.replace(/\s+/g, " ").trim().slice(0, 80) || "";
+      noteUnread(bot, before);
       if (!res.pending && !res.sending) bot.waitingSinceMs = null;
     }
     if (last && last.role === "assistant" && !res.sending && !isBusyWithText()) {
@@ -470,10 +498,35 @@ function markShownAsRead(botId, last) {
     .catch(() => {});
 }
 
+// A new reply is previewed on the closed notch for a moment, whichever bot it came from. It stays
+// closed: the count, the preview or the bot's dot is there until the reply is opened.
+const PEEK_MS = 7000;
+let peekTimer = null;
+
+function noteUnread(bot, before) {
+  if (bot.unreadCount <= before || state.expanded) return;
+  clearTimeout(peekTimer);
+  state.peekBotId = bot.id;
+  peekTimer = setTimeout(endPeek, PEEK_MS);
+}
+
+function endPeek() {
+  clearTimeout(peekTimer);
+  if (!state.peekBotId) return;
+  state.peekBotId = null;
+  renderPouch();
+}
+
+// The closed notch shows the previewed bot for a moment, otherwise the selected one.
 function renderUnread() {
-  const bot = getSelectedBot();
+  const peeking = state.expanded ? null : findBot(state.peekBotId);
+  const bot = peeking || getSelectedBot();
   const count = bot?.unreadCount || 0;
   dom.pouch.dataset.unread = String(count > 0);
+  dom.pouch.dataset.peek = String(Boolean(peeking));
+  dom.collapsedName.textContent = bot?.name || "MausBot Notch";
+  dom.collapsedMark.style.background = peeking ? botColor(bot) : "";
+  dom.collapsedUnread.style.background = peeking ? botColor(bot) : "";
   dom.collapsedUnread.hidden = count === 0;
   dom.collapsedUnread.textContent = count > 99 ? "99+" : String(count);
   dom.collapsedPreview.hidden = count === 0;
@@ -483,7 +536,7 @@ function renderUnread() {
       .filter((b) => b !== bot && b.unreadCount)
       .map((b) => {
         const dot = document.createElement("span");
-        dot.style.background = BOT_COLORS[b.color] || DEFAULT_BOT_COLOR;
+        dot.style.background = botColor(b);
         dot.title = `${b.name}: ${b.unreadCount} unread`;
         return dot;
       })
@@ -562,8 +615,8 @@ function openTranscript() {
   pollTranscriptOnce(bot.id);
 }
 
-function closeTranscript() {
-  if (state.view !== "transcript") return;
+function closeView() {
+  if (state.view === "default") return;
   state.view = "default";
   renderPouch();
 }
@@ -574,6 +627,12 @@ function formatTime(ms) {
   return date.toDateString() === new Date().toDateString()
     ? time
     : `${date.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+// Collapsed pill clock: shows current time, updates once per minute.
+function renderClock() {
+  const now = new Date();
+  dom.collapsedClock.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 function transcriptSpeaker(entry) {
@@ -608,11 +667,16 @@ function transcriptRow(entry) {
   return row;
 }
 
+// The view on screen right now: a result card covers whichever one is open.
+function shownView() {
+  return state.expanded && !state.result ? state.view : "default";
+}
+
 function renderTranscript() {
   const bot = getSelectedBot();
-  const show = state.view === "transcript" && state.expanded && !state.result;
+  const show = shownView() === "transcript";
   dom.transcriptView.hidden = !show;
-  dom.pouch.dataset.view = show ? "transcript" : "default";
+  dom.pouch.dataset.view = shownView();
   if (!show) return;
   const entries = state.transcript.botId === bot?.id ? state.transcript.entries : [];
   dom.transcriptCopy.disabled = entries.length === 0;
@@ -636,13 +700,210 @@ function renderTranscript() {
 }
 
 dom.transcriptChip.addEventListener("click", openTranscript);
-dom.transcriptClose.addEventListener("click", closeTranscript);
+dom.transcriptClose.addEventListener("click", closeView);
 dom.transcriptCopy.addEventListener("click", () => {
   const text = state.transcript.entries
     .map((e) => `[${transcriptSpeaker(e)} · ${formatTime(e.timestampMs)}]\n${e.text}`)
     .join("\n\n");
   if (text) copyFrom(dom.transcriptCopy, text);
 });
+
+// ============================================================================
+// CALENDAR: the native side reads one day of the Mac's calendars and answers with "calendarDay".
+// ============================================================================
+// Local calendar day, not UTC: in the evening toISOString() is already on tomorrow.
+function localDay(date) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+}
+
+// The day `delta` days after `day`. Noon, so a clock change can't move it to another day.
+function dayAfter(day, delta) {
+  const date = new Date(`${day}T12:00:00`);
+  date.setDate(date.getDate() + delta);
+  return localDay(date);
+}
+
+function dayLabel(day) {
+  const today = localDay(new Date());
+  const label = new Date(`${day}T12:00:00`).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  const near = { [dayAfter(today, -1)]: "Yesterday", [today]: "Today", [dayAfter(today, 1)]: "Tomorrow" }[day];
+  return near ? `${near} · ${label}` : label;
+}
+
+function showCalendarDay(date) {
+  state.view = "calendar";
+  state.calendar = { date, status: "loading", events: [], error: "", openId: null, linkError: "" };
+  if (isNativeHost) postNativeMessage({ type: "calendarDay", date });
+  else Object.assign(state.calendar, { status: "error", error: "The calendar only shows in the notch app." });
+  renderPouch();
+}
+
+function stepCalendar(delta) {
+  showCalendarDay(dayAfter(state.calendar.date, delta));
+}
+
+function eventTime(event) {
+  if (event.allDay) return "All day";
+  const time = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (event.startMs === null) return `Until ${time(event.endMs)}`;
+  if (event.endMs === null) return `From ${time(event.startMs)}`;
+  return event.endMs === event.startMs ? time(event.startMs) : `${time(event.startMs)} – ${time(event.endMs)}`;
+}
+
+function calendarRow(event) {
+  const row = document.createElement("div");
+  row.className = "calendar-event";
+  row.style.setProperty("--calendar-color", event.color);
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "calendar-event-open";
+  open.title = "Show details";
+  open.addEventListener("click", () => openEvent(event.id));
+  for (const [name, text] of [["time", eventTime(event)], ["title", event.title || "Untitled"], ["name", event.calendar]]) {
+    const part = document.createElement("div");
+    part.className = `calendar-event-${name}`;
+    part.textContent = text;
+    open.append(part);
+  }
+  row.append(open);
+  if (event.link?.join) {
+    const join = document.createElement("button");
+    join.type = "button";
+    join.className = "chip chip-primary calendar-event-join";
+    join.textContent = "Join";
+    join.title = `Join on ${event.link.label}`;
+    join.addEventListener("click", () => openEventLink(event.id));
+    row.append(join);
+  }
+  return row;
+}
+
+function openEvent(id, linkError = "") {
+  Object.assign(state.calendar, { openId: id, linkError });
+  renderPouch();
+}
+
+function shownEvent() {
+  return state.calendar.events.find((event) => event.id === state.calendar.openId);
+}
+
+// The native side keeps the addresses and opens this event's; on success it closes the notch.
+function openEventLink(id) {
+  postNativeMessage({ type: "openEventLink", id });
+}
+
+// Esc: from an event back to its day, from there to the buttons.
+function leaveView() {
+  if (shownView() === "calendar" && shownEvent()) openEvent(null);
+  else closeView();
+}
+
+// When the whole event is, which can be more than the day it is listed on.
+function eventSpan(event) {
+  const day = { weekday: "short", month: "short", day: "numeric", year: "numeric" };
+  const format = new Intl.DateTimeFormat([], event.wholeDays ? day : { ...day, hour: "numeric", minute: "2-digit" });
+  const span = format.formatRange(event.fromMs, event.toMs);
+  return event.wholeDays ? `${span} · All day` : span;
+}
+
+// Invitations often carry HTML. It is parsed in a document that runs and loads nothing, for its text only.
+function plainNotes(notes) {
+  if (!/<(a|b|br|div|html|i|li|p|span|table|u|ul)\b/i.test(notes)) return notes.trim();
+  const doc = new DOMParser().parseFromString(notes, "text/html");
+  doc.querySelectorAll("script, style").forEach((el) => el.remove());
+  doc.querySelectorAll("br, p, div, li, tr").forEach((el) => el.before("\n"));
+  return doc.body.textContent.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function eventDetails(event) {
+  const title = document.createElement("div");
+  title.className = "event-detail-title";
+  title.textContent = event.title || "Untitled";
+  const people = event.people.map((p) => `${p.name || "Someone"}${p.me ? " (you)" : ""}${p.reply ? ` · ${p.reply}` : ""}`);
+  const lines = [
+    ["When", eventSpan(event)],
+    ["Repeats", event.repeats],
+    ["Where", event.location],
+    ["Calendar", event.calendar],
+    ["Organizer", event.organizer],
+    ["People", people.join("\n")],
+    ["Notes", plainNotes(event.notes)]
+  ].filter(([, text]) => text);
+  return [title, ...lines.flatMap(([label, text]) => [["label", label], ["text", text]]).map(([name, text]) => {
+    const part = document.createElement("div");
+    part.className = `event-detail-${name}`;
+    part.textContent = text;
+    return part;
+  })];
+}
+
+function renderEvent(event) {
+  dom.eventOpenLink.hidden = !event?.link;
+  if (!event) return;
+  dom.eventOpenLink.textContent = event.link?.join ? `Join on ${event.link.label}` : `Open ${event.link?.label}`;
+  // Rebuilt only when something changed, so reading and selecting text aren't interrupted.
+  const key = JSON.stringify([event, state.calendar.linkError]);
+  if (dom.eventDetail.dataset.shown === key) return;
+  dom.eventDetail.dataset.shown = key;
+  dom.eventDetail.style.setProperty("--calendar-color", event.color);
+  dom.eventDetail.replaceChildren(...eventDetails(event));
+  if (state.calendar.linkError) {
+    const error = document.createElement("div");
+    error.className = "event-detail-error";
+    error.textContent = state.calendar.linkError;
+    dom.eventDetail.prepend(error);
+  }
+  dom.eventDetail.scrollTop = 0;
+}
+
+function renderCalendar() {
+  const show = shownView() === "calendar";
+  dom.calendarView.hidden = !show;
+  if (!show) return;
+  const { date, status, events, error } = state.calendar;
+  dom.calendarDate.textContent = dayLabel(date);
+  const event = shownEvent();
+  dom.calendarToday.hidden = Boolean(event) || date === localDay(new Date());
+  dom.calendarPrev.hidden = dom.calendarNext.hidden = dom.calendarList.hidden = Boolean(event);
+  dom.eventBack.hidden = dom.eventDetail.hidden = !event;
+  dom.calendarPrivacy.hidden = status !== "denied";
+  renderEvent(event);
+  // Rebuilt only when something changed, so scrolling isn't interrupted.
+  const key = JSON.stringify([date, status, events, error]);
+  if (dom.calendarList.dataset.shown === key) return;
+  dom.calendarList.dataset.shown = key;
+  if (status === "ok" && events.length > 0) {
+    dom.calendarList.replaceChildren(...events.map(calendarRow));
+    dom.calendarList.scrollTop = 0;
+    return;
+  }
+  const message = document.createElement("div");
+  message.className = "transcript-empty";
+  message.textContent = {
+    ok: "Nothing on this day.",
+    loading: "Reading your calendar…",
+    denied: "MausBot Notch isn't allowed to see your calendar. Turn on Full Access for it under Calendars."
+  }[status] || error || "Couldn't read your calendar.";
+  dom.calendarList.replaceChildren(message);
+}
+
+dom.calendarChip.addEventListener("click", () => showCalendarDay(localDay(new Date())));
+dom.calendarToday.addEventListener("click", () => showCalendarDay(localDay(new Date())));
+dom.calendarPrev.addEventListener("click", () => stepCalendar(-1));
+dom.calendarNext.addEventListener("click", () => stepCalendar(1));
+dom.calendarClose.addEventListener("click", closeView);
+dom.eventBack.addEventListener("click", () => openEvent(null));
+dom.eventOpenLink.addEventListener("click", () => openEventLink(state.calendar.openId));
+dom.calendarPrivacy.addEventListener("click", () => postNativeMessage({ type: "openCalendarPrivacy" }));
+
+// ← and →: another day in the calendar (← goes back from an event), another bot everywhere else.
+function arrow(delta) {
+  if (shownView() === "calendar" && shownEvent()) {
+    if (delta < 0) openEvent(null);
+  } else if (shownView() === "calendar") stepCalendar(delta);
+  else cycleBot(delta);
+}
 
 // ============================================================================
 // EVENTS & SHORTCUTS
@@ -652,8 +913,14 @@ dom.pouch.addEventListener("pointerdown", takeKeyboard, true);
 
 // Collapsed: click to expand. Expanded: click is disabled via pointer-events:none in CSS.
 dom.collapsedBar.addEventListener("click", () => {
-  if (!state.expanded) setExpanded(true);
+  if (!state.expanded) openByUser();
 });
+
+// Opening while a reply is previewed opens the bot it came from.
+function openByUser() {
+  if (state.peekBotId && state.peekBotId !== state.selectedBotId) selectBot(state.peekBotId);
+  setExpanded(true);
+}
 
 // Double-tap the identity bar or title block while expanded collapses the notch.
 function collapseOnDoubleTap() {
@@ -727,8 +994,8 @@ window.addEventListener("keydown", (e) => {
       setTypingMode(false);
       return;
     }
-    if (state.view === "transcript") {
-      closeTranscript();
+    if (state.view !== "default") {
+      leaveView();
       return;
     }
     setExpanded(false);
@@ -739,11 +1006,11 @@ window.addEventListener("keydown", (e) => {
 
   if (e.key === "ArrowLeft") {
     e.preventDefault();
-    cycleBot(-1);
+    arrow(-1);
   } else if (e.key === "ArrowRight") {
     e.preventDefault();
-    cycleBot(1);
-  } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    arrow(1);
+  } else if (shownView() !== "calendar" && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     setTypingMode(true, e.key);
   }
@@ -848,7 +1115,36 @@ let taskSeq = 0;
 function showRewriteMenu(show) {
   dom.rewriteMenu.hidden = !show;
   dom.actionChips.hidden = show;
+  dom.pouch.dataset.rewrite = String(show);
 }
+
+// The user's own presets for this bot, after the four built-in ones.
+function renderRewriteMenu() {
+  const presets = getSelectedBot()?.presets || [];
+  const key = JSON.stringify(presets);
+  dom.pouch.dataset.presets = String(presets.length > 0);
+  if (dom.rewriteMine.dataset.shown === key) return;
+  dom.rewriteMine.dataset.shown = key;
+  dom.rewriteMine.replaceChildren(
+    ...presets.map((preset) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.dataset.prompt = preset.id;
+      chip.textContent = preset.name;
+      chip.addEventListener("click", () => startScreenTask("rewrite", preset.id));
+      return chip;
+    })
+  );
+}
+
+function openSettings(tab) {
+  setExpanded(false);
+  postNativeMessage({ type: "openSettings", tab });
+}
+
+dom.settingsChip.addEventListener("click", () => openSettings("bots"));
+dom.rewriteEdit.addEventListener("click", () => openSettings("presets"));
 
 function startScreenTask(task, promptId) {
   cancelDraft();
@@ -862,7 +1158,7 @@ function startScreenTask(task, promptId) {
     seq: ++taskSeq,
     task,
     promptId: promptId || "",
-    title: promptId ? PROMPT_NAMES[promptId] || TASK_TITLES[task] : TASK_TITLES[task],
+    title: PROMPT_NAMES[promptId] || getSelectedBot()?.presets?.find((p) => p.id === promptId)?.name || TASK_TITLES[task],
     text: TASK_WORKING[task],
     notes: "",
     phase: "working",
@@ -1045,7 +1341,8 @@ window.__notchCommand = async (cmd) => {
     case "toggleExpand":
       // ⌥Space on a notch that opened by itself means "let me use it", not "close it".
       if (state.expanded && state.passive && cmd.byUser) takeKeyboard();
-      else setExpanded(!state.expanded);
+      else if (state.expanded) setExpanded(false);
+      else openByUser();
       break;
     case "screenAnswerReading":
       // Double-tap ⌘ (bare, no other key): the native side is reading the email, Slack
@@ -1055,7 +1352,7 @@ window.__notchCommand = async (cmd) => {
       setTypingMode(false);
       stopReplyPoll();
       closeResult(false);
-      closeTranscript();
+      closeView();
       state.status = "working";
       state.statusCaption = "Reading your screen…";
       renderPouch();
@@ -1121,11 +1418,14 @@ window.__notchCommand = async (cmd) => {
         renderPouch();
       }
       break;
+    case "collapse":
+      setExpanded(false);
+      break;
     case "nextBot":
-      cycleBot(1);
+      arrow(1);
       break;
     case "prevBot":
-      cycleBot(-1);
+      arrow(-1);
       break;
     case "escape":
       if (state.result) {
@@ -1133,17 +1433,27 @@ window.__notchCommand = async (cmd) => {
       } else if (state.typing) {
         dom.typeInput.value = "";
         setTypingMode(false);
-      } else if (state.view === "transcript") {
-        closeTranscript();
+      } else if (state.view !== "default") {
+        leaveView();
       } else if (state.expanded) {
         setExpanded(false);
       }
       break;
     case "selectBot":
       if (cmd.botId) {
+        if (state.view === "calendar") closeView();
         await selectBot(cmd.botId);
         setExpanded(true);
       }
+      break;
+    case "calendarDay":
+      // An answer for a day that has since been left is dropped.
+      if (state.view !== "calendar" || cmd.date !== state.calendar.date) break;
+      Object.assign(state.calendar, { status: cmd.status, events: cmd.events || [], error: cmd.error || "" });
+      renderPouch();
+      break;
+    case "eventLinkFailed":
+      if (state.view === "calendar") openEvent(cmd.id, "Couldn't open the link. Open the event in Calendar instead.");
       break;
     case "setNotchGeometry":
       if (cmd.notchWidth && cmd.notchWidth > 100) {
@@ -1162,13 +1472,18 @@ async function refreshBootstrap() {
     const data = await apiFetch("/api/bootstrap").then((r) => r.json());
     if (!data.ok || !Array.isArray(data.bots)) return;
 
-    const oldIds = state.bots.map((b) => b.id).join(",");
-    const newIds = data.bots.map((b) => b.id).join(",");
-    const rosterChanged = oldIds !== newIds;
+    const before = new Map(state.bots.map((b) => [b.id, b.unreadCount || 0]));
+    const signature = (bots) => JSON.stringify(bots.map((b) => [b.id, b.name, b.color, b.presets]));
+    const rosterChanged = signature(state.bots) !== signature(data.bots);
 
     state.bots = data.bots;
-    if (!state.selectedBotId || !state.bots.some((b) => b.id === state.selectedBotId)) {
-      state.selectedBotId = data.selectedBotId || state.bots[0]?.id || null;
+    state.openOnReply = data.openOnReply;
+    for (const bot of state.bots) if (before.has(bot.id)) noteUnread(bot, before.get(bot.id));
+    if (!findBot(state.selectedBotId)) {
+      state.selectedBotId = data.selectedBotId;
+      state.status = "idle";
+      state.statusCaption = "";
+      stopReplyPoll();
     }
 
     if (rosterChanged) {
@@ -1189,6 +1504,11 @@ async function init() {
   await refreshBootstrap();
   renderPouch();
   reportHitRectToNative();
+  renderClock();
+  setInterval(renderClock, 30000);
+  // The native side owns the real notch size; ask again on every page load so a
+  // reload never falls back to the defaults above.
+  postNativeMessage({ type: "requestNotchGeometry" });
   connectEvents();
   setInterval(refreshBootstrap, 8000);
 }
